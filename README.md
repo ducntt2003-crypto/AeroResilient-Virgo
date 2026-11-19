@@ -46,9 +46,9 @@ Standard multirotors suffer from fundamental **underactuation**: to produce hori
 
 **AeroResilient-Virgo** solves this challenge by developing an end-to-end Reinforcement Learning and optimal null-space thrust vectoring framework for a **12-DOF Coaxial MorphQuad UAV** ([Tzoumas Lab, arXiv:2607.02764](https://arxiv.org/abs/2607.02764)):
 * **16 Actuators**: 8 coaxial counter-rotating brushless motors (112 N total thrust) + 8 Dynamixel smart servos providing active 2-DOF tilt-rotors on all 4 arms.
-* **Decoupled 6-DOF Flight**: Pure omnidirectional force generation in link frame, enabling rapid lateral evasions and wind cancellation while maintaining **dead-level attitude ($\text{roll} = 0^\circ, \text{pitch} = 0^\circ$)**.
-* **Autonomous Tangent Heading Alignment**: Mũi drone xoay mượt mà theo tiếp tuyến vector vận tốc ($\psi_d(t) = \text{atan2}(v_y, v_x)$) với sai số yaw chỉ $1.8^\circ$.
-* **Robustness under Beaufort Scales 1–6**: Rejecting turbulent multi-frequency gusts up to $19.6\text{ m/s}$ ($\approx 71\text{ km/h}$) and relentless $15\text{ N}$ push impacts every $1.4\text{ s}$ with **0.0% crash rate**.
+* **Decoupled 6-DOF Flight**: Pure omnidirectional force generation in link frame, enabling rapid lateral evasions and wind cancellation while maintaining **dead-level attitude (roll = 0.0°, pitch = 0.0°)**.
+* **Autonomous Tangent Heading Alignment**: Mũi drone tự động xoay mượt mà theo tiếp tuyến vector vận tốc với góc yaw mục tiêu `psi_d(t) = atan2(v_y, v_x)` và sai số yaw chỉ 1.8°.
+* **Robustness under Beaufort Scales 1–6**: Rejecting turbulent multi-frequency gusts up to 19.6 m/s (~71 km/h) and relentless 15 N push impacts every 1.4 s with **0.0% crash rate**.
 * **Zero-Dependency PX4 C++ Deployment**: Direct compilation to standalone C++ headers (`virgo_policy.h`, `virgo_allocation.h`) for Pixhawk autopilot hardware.
 
 ---
@@ -62,26 +62,32 @@ Standard multirotors suffer from fundamental **underactuation**: to produce hori
 </div>
 
 ### 1. Actuation Model & Link-Frame Wrench Composition
-Each of the 4 arms houses an outer gimbal servo ($\alpha_i$, revolving around the arm axis) and an inner gimbal servo ($\beta_i$, tilting the motor shaft), driving 2 coaxial counter-rotating propellers delivering arm thrust $T_i \in [0.0, 28.0]\text{ N}$.
+Each of the 4 arms houses an active 2-DOF tilt mechanism ($\alpha$ revolving around arm axis, $\beta$ tilting motor shaft), driving 2 coaxial counter-rotating brushless motors delivering thrust up to 28.0 N per arm.
 
 The delivered thrust vector for arm $i$ in body frame is:
 
 $$
-\mathbf{t}_{b, i} = \begin{bmatrix} t_{bx, i} \\ t_{by, i} \\ t_{bz, i} \end{bmatrix} = \begin{bmatrix} T_i \sin\alpha_i \cos\beta_i \\ -T_i \sin\beta_i \\ T_i \cos\alpha_i \cos\beta_i \end{bmatrix}
+\mathbf{t}_{b, i} = \begin{bmatrix} t_{bx, i} \\ t_{by, i} \\ t_{bz, i} \end{bmatrix} = \begin{bmatrix} T_i \sin\alpha_i \cos\beta_i \\ -T_i \sin\beta_i \\ T_i \cos\alpha_i \cos\beta_i \end{bmatrix}, \quad T_i \in [0.0, 28.0]\text{ N}
 $$
 
-The total commanded wrench $\mathbf{w}_{\text{des}} = \left[\mathbf{f}_{\text{cmd}, b}^T, \boldsymbol{\tau}_{\text{cmd}, b}^T\right]^T \in \mathbb{R}^6$ is mapped to the 12 virtual thrust components $\mathbf{t} = \left[\mathbf{t}_{b, 1}^T, \dots, \mathbf{t}_{b, 4}^T\right]^T \in \mathbb{R}^{12}$ via allocation matrix $\mathbf{M} \in \mathbb{R}^{6 \times 12}$:
+The total commanded 6-DOF wrench $\mathbf{w}_{\text{des}}$ is mapped to the 12 virtual thrust components $\mathbf{t}$ via allocation matrix $\mathbf{M} \in \mathbb{R}^{6 \times 12}$:
 
 $$
 \begin{aligned}
-\mathbf{w}_{\text{des}} &= \mathbf{M} \mathbf{t} \\
+\mathbf{w}_{\text{des}} &= \begin{bmatrix} \mathbf{f}_{\text{cmd}, b} \\ \boldsymbol{\tau}_{\text{cmd}, b} \end{bmatrix} = \mathbf{M} \mathbf{t} \\
 \mathbf{t}^* &= \mathbf{M}^\dagger \mathbf{w}_{\text{des}} + \left(\mathbf{I} - \mathbf{M}^\dagger \mathbf{M}\right) \mathbf{c}_{\text{null}}
 \end{aligned}
 $$
 
+where the virtual thrust vector $\mathbf{t} \in \mathbb{R}^{12}$ concatenates link-frame thrust vectors across all 4 arms:
+
+$$
+\mathbf{t} = \begin{bmatrix} \mathbf{t}_{b, 1}^T, & \mathbf{t}_{b, 2}^T, & \mathbf{t}_{b, 3}^T, & \mathbf{t}_{b, 4}^T \end{bmatrix}^T \in \mathbb{R}^{12}
+$$
+
 ### 2. Critical Physics Fixes for Zero-Tilt Stability
 * **Link-Frame Semantics in Isaac Lab**: Isaac Lab's `permanent_wrench_composer.set_forces_and_torques` executes `apply_forces_and_torques_at_position(..., is_global=False)`, strictly evaluating wrenches in the **link (body) frame**. Delivering world vectors caused a catastrophic double-rotation ($\mathbf{R}^2$), inverting horizontal forces at turns. We compute and deliver wrenches strictly in the body frame with `is_global=False`.
-* **Positive Vertical Thrust Constraint**: Unconstrained pseudo-inversion produced negative vertical components ($t_{z, i} < 0$) on inboard arms during high-rate yaw-lateral maneuvers, forcing `atan2` to flip servos upside down ($\pm 180^\circ$). We enforce $t_{z, i} \ge 1.0\text{ N}$ and clip gimbals to physical Dynamixel limits ($\pm 37^\circ$).
+* **Positive Vertical Thrust Constraint**: Unconstrained pseudo-inversion produced negative vertical components on inboard arms during high-rate yaw-lateral maneuvers, forcing the inverse kinematics solver to flip servos upside down (±180°). We strictly enforce positive vertical lift $t_{z, i} \ge 1.0\text{ N}$ and constrain gimbal deflections to physical Dynamixel limits (±37°).
 * **1st-Order Mechanical Bandwidth Filter ("Độ Đầm")**: High-frequency servo chattering is eliminated via an exponential low-pass filter ($\gamma = 0.65$, cutoff $\approx 15\text{ Hz}$), matching physical Dynamixel XL/XC actuator dynamics:
 
 $$
@@ -101,17 +107,38 @@ $$
 The policy is trained with Proximal Policy Optimization (PPO) implemented in PyTorch running natively on GPU with Warp tensors.
 
 ### 1. Observation Space (35-Dimensional Vector)
-The policy receives a fully decoupled, normalized observation vector:
-* **Position Error in Body Frame** $\mathbf{e}_{\text{pos}, b} = \mathbf{R}_{BW} (\mathbf{p}_{d, w} - \mathbf{p}_w) \in \mathbb{R}^3$
-* **Body Linear Velocity** $\mathbf{v}_b \in \mathbb{R}^3$
-* **Body Angular Velocity** $\boldsymbol{\omega}_b \in \mathbb{R}^3$
-* **Target Velocity in Body Frame** $\mathbf{v}_{d, b} \in \mathbb{R}^3$
-* **Orientation Error Quaternion** $\mathbf{q}_{\text{err}} = \mathbf{q}_w^{-1} \otimes \mathbf{q}_{d, w} \in \mathbb{R}^4$
-* **Current Arm Thrusts** $\mathbf{T} / 28.0 \in \mathbb{R}^4$
-* **Current Servo Angles** $\boldsymbol{\alpha} / \alpha_{\max}, \boldsymbol{\beta} / \beta_{\max} \in \mathbb{R}^8$
-* **Target Feedforward Acceleration in Body Frame** $\mathbf{a}_{d, b} \in \mathbb{R}^3$
-* **Future Preview Lookahead Error ($t + 0.6\text{ s}$)** $\mathbf{e}_{\text{lookahead}, b} \in \mathbb{R}^3$
-* **Normalized Trajectory Phase** $\sin(\omega t) \in \mathbb{R}^1$
+The policy receives a fully decoupled, normalized link-frame observation vector $\mathbf{o}_t \in \mathbb{R}^{35}$:
+
+$$
+\mathbf{o}_t = \begin{bmatrix}
+\mathbf{e}_{\text{pos}, b} \\
+\mathbf{v}_b \\
+\boldsymbol{\omega}_b \\
+\mathbf{v}_{d, b} \\
+\mathbf{q}_{\text{err}} \\
+\mathbf{T} / 28.0 \\
+\boldsymbol{\alpha} / \alpha_{\max} \\
+\boldsymbol{\beta} / \beta_{\max} \\
+\mathbf{a}_{d, b} \\
+\mathbf{e}_{\text{lookahead}, b} \\
+\sin(\omega t)
+\end{bmatrix} \in \mathbb{R}^{35}
+$$
+
+| Dimension | State Variable | Definition & Representation | Link-Frame Description |
+|:---:|---|---|---|
+| **3** | **Position Tracking Error** | `e_pos,b = R_BW * (p_d - p)` | Translational error rotated into body link frame |
+| **3** | **Body Linear Velocity** | `v_b = [v_bx, v_by, v_bz]^T` | Linear velocity evaluated in robot body frame |
+| **3** | **Body Angular Velocity** | `w_b = [w_x, w_y, w_z]^T` | Angular rates measured from onboard IMU gyroscope |
+| **3** | **Target Velocity** | `v_d,b = R_BW * v_d,w` | Feedforward trajectory velocity in body frame |
+| **4** | **Attitude Quaternion Error** | `q_err = q_w^(-1) ⊗ q_d` | Unit quaternion tracking error `[qw, qx, qy, qz]` |
+| **4** | **Arm Thrust States** | `T_i / 28.0` ($i = 1 \dots 4$) | Normalized current motor thrust across all 4 arms |
+| **4** | **Gimbal Pitch Deflection** | `alpha_i / 37.0°` ($i = 1 \dots 4$) | Normalized outer gimbal deflection angles (±37°) |
+| **4** | **Gimbal Roll Deflection** | `beta_i / 37.0°` ($i = 1 \dots 4$) | Normalized inner gimbal deflection angles (±37°) |
+| **3** | **Target Acceleration** | `a_d,b = R_BW * a_d,w` | Trajectory centripetal acceleration in body frame |
+| **3** | **Lookahead Preview Error** | `e_lookahead,b = R_BW * (p_d(t+0.6s) - p)` | Future trajectory preview window (0.6s lookahead) |
+| **1** | **Trajectory Phase** | `sin(w*t)` | Cyclic phase encoding for lemniscate frequency |
+| **35** | **Total State Dimension** | **Full Decoupled MDP State Vector** | Complete Link-Frame Observation for Neural Policy |
 
 ### 2. Multi-Objective Reward Function
 
@@ -162,8 +189,8 @@ Evaluated on an $8.0\text{ m} \times 3.2\text{ m} \times 0.8\text{ m}$ 3D Lemnis
 | **Phase 4: Beaufort 6 (Severe)** | 13.8 – 19.6 m/s (50 – 71 km/h) + 15 N Microburst | **55.7 cm** | **< 1.16°** | **RESILIENT** |
 | **Overall 80s Mission** | Full 4-Phase Trajectory Cycle | **45.4 cm** | **< 0.35° Avg** | **100% Completion (0% Crash)** |
 
-* **Zero-Tilt Verification**: Across the entire 80 seconds, maximum roll and pitch tilt never exceeded $1.16^\circ$, maintaining near-perfect horizontal camera and payload stability.
-* **Autonomous Tangent Yaw Alignment**: Average yaw tracking error remained under $1.8^\circ$ throughout all apex turns ($X = \pm 4.0\text{ m}$).
+* **Zero-Tilt Verification**: Across the entire 80 seconds, maximum roll and pitch tilt never exceeded 1.16°, maintaining near-perfect horizontal camera and payload stability.
+* **Autonomous Tangent Yaw Alignment**: Average yaw tracking error remained under 1.8° throughout all apex turns ($X = \pm 4.0\text{ m}$).
 
 ### 3. PPO Training Convergence Curve
 <div align="center">
@@ -176,7 +203,13 @@ Evaluated on an $8.0\text{ m} \times 3.2\text{ m} \times 0.8\text{ m}$ 3D Lemnis
 
 ## 🔮 Future Roadmap: Hardware Redesign & Control Upgrades for Beaufort 6–10
 
-Operating under **Beaufort Scale 7 to 10** ($14.0 - 28.4\text{ m/s}$, equivalent to **$50 - 102\text{ km/h}$ - Tropical Storm / Violent Gale**) introduces extreme aerodynamic challenges: aerodynamic drag forces scale with the square of velocity ($F_{\text{drag}} \propto v_{\text{wind}}^2$), reaching 50 – 80 N of sustained lateral force, accompanied by severe rotor vortex ring states (VRS), aerodynamic blade flutter, and turbulent cross-shear.
+Operating under **Beaufort Scale 7 to 10** (14.0 – 28.4 m/s, equivalent to **50 – 102 km/h - Tropical Storm / Violent Gale**) introduces extreme aerodynamic challenges: aerodynamic drag forces scale quadratically with relative wind velocity:
+
+$$
+F_{\text{drag}} \propto v_{\text{wind}}^2
+$$
+
+reaching 50 – 80 N of sustained lateral force, accompanied by severe rotor vortex ring states (VRS), aerodynamic blade flutter, and turbulent cross-shear.
 
 To master extreme Beaufort 6–10 environments, we propose the following multi-disciplinary hardware and algorithmic upgrades:
 
@@ -200,9 +233,9 @@ flowchart TD
 ```
 
 ### 1. Aerodynamic & Structural Hardware Redesign
-* **Streamlined Low-Drag Airframe Fairing**: The current open-frame chassis exhibits a high drag area ($C_d A \approx 0.09\text{ m}^2$). Enclosing the central avionics and arm gimbals in teardrop-profile carbon-fiber fairings will drop $C_d$ to $< 0.28$, reducing lateral drag force by **65%** at 25 m/s.
+* **Streamlined Low-Drag Airframe Fairing**: The current open-frame chassis exhibits a high drag area (`C_D * A ≈ 0.09 m²`). Enclosing the central avionics and arm gimbals in teardrop-profile carbon-fiber fairings will drop `C_D` to `< 0.28`, reducing lateral drag force by **65%** at 25 m/s.
 * **Next-Gen Coaxial Powertrain ($T/W > 4.5$)**: Upgrading to high-voltage brushless motors (e.g., T-Motor U8 II / F90 PRO) with ultra-rigid carbon-fiber propellers increases maximum combined thrust from 112 N to **> 220 N**, providing sufficient control authority to overcome 70 N wind drag while retaining 50 N of vertical lift reserve.
-* **Harmonic Drive / High-Torque Smart Servos**: Upgrading the gimbal servos to Dynamixel XH540 or brushless harmonic drives (zero-backlash, $> 120\text{ rpm}$ slew rate, holding torque $> 10\text{ Nm}$) ensures the gimbals will not be back-driven by dynamic blade pitch moments during 100 km/h gusts.
+* **Harmonic Drive / High-Torque Smart Servos**: Upgrading the gimbal servos to Dynamixel XH540 or brushless harmonic drives (zero-backlash, slew rate > 120 rpm, holding torque > 10 Nm) ensures the gimbals will not be back-driven by dynamic blade pitch moments during 100 km/h gusts.
 * **Titanium Grade-5 Gimbal Shafts**: Prevents arm flexure and micro-vibrations under severe cross-shear aerodynamic loads.
 
 ### 2. Advanced Control & Algorithmic Upgrades
