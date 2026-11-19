@@ -160,7 +160,9 @@ def create_diagram():
             zorder=5)
 
     plt.tight_layout()
-    output_path = '/home/duc/Raptor_UAV/Virgo_RL/snapshots/virgo_system_architecture.png'
+    import os
+    REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    output_path = os.path.join(REPO_DIR, "snapshots", "virgo_system_architecture.png")
     plt.savefig(output_path, dpi=300, facecolor='white', edgecolor='none', bbox_inches='tight')
     plt.close()
     print(f"Generated {output_path} successfully without warnings!")

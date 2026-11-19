@@ -1,5 +1,8 @@
+import os
 import sys
-sys.path.append("/home/duc/Raptor_UAV/Virgo_RL")
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_DIR)
+sys.path.insert(0, os.path.join(REPO_DIR, "src"))
 import torch
 import math
 from isaaclab.app import AppLauncher

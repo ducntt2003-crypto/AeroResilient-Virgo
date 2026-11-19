@@ -4,6 +4,13 @@ Test script for VirgoEnv in Isaac Lab:
 Tests environment instantiation, reset, stepping, observations, and rewards.
 """
 
+import os
+import sys
+
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_DIR)
+sys.path.insert(0, os.path.join(REPO_DIR, "src"))
+
 from isaaclab.app import AppLauncher
 
 # Launch headless app

@@ -3,6 +3,13 @@
 Verification script: Spawns Virgo_RL in Isaac Lab and runs physics simulation for 100 steps.
 """
 
+import os
+import sys
+
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_DIR)
+sys.path.insert(0, os.path.join(REPO_DIR, "src"))
+
 from isaaclab.app import AppLauncher
 
 # Launch Isaac Sim headless

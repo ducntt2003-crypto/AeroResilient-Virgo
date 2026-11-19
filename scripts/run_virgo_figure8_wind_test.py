@@ -23,14 +23,16 @@ import time
 import argparse
 import numpy as np
 
-# Ensure path
-sys.path.append("/home/duc/Raptor_UAV/Virgo_RL")
+# Ensure repository root and src are on sys.path
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_DIR)
+sys.path.insert(0, os.path.join(REPO_DIR, "src"))
 
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Virgo UAV Figure-8 & Wind Benchmark")
 parser.add_argument("--num-envs", type=int, default=1, help="Number of parallel environments (default: 1 for clear GUI view)")
-parser.add_argument("--checkpoint", type=str, default="/home/duc/Raptor_UAV/Virgo_RL/checkpoints/virgo_isaaclab_best.pt", help="Path to trained policy checkpoint")
+parser.add_argument("--checkpoint", type=str, default=os.path.join(REPO_DIR, "checkpoints", "virgo_isaaclab_best.pt"), help="Path to trained policy checkpoint")
 parser.add_argument("--save-plot", action="store_true", default=True, help="Save 3D trajectory tracking plot to snapshots")
 parser.add_argument("--trajectory-time", type=float, default=80.0, help="Total evaluation time in seconds (default: 80s for 4 full 20s Figure-8 phases)")
 parser.add_argument("--loop", action="store_true", default=False, help="Run continuously in an infinite loop for live demonstration")
@@ -433,7 +435,7 @@ def main():
 
     # Save structured JSON benchmark summary for automated self-evaluation
     import json
-    summary_path = "/home/duc/Raptor_UAV/Virgo_RL/snapshots/benchmark_summary.json"
+    summary_path = os.path.join(REPO_DIR, "snapshots", "benchmark_summary.json")
     os.makedirs(os.path.dirname(summary_path), exist_ok=True)
     with open(summary_path, "w") as f:
         json.dump({
@@ -510,7 +512,7 @@ def main():
             ax2.legend(lines, labels, facecolor="white", edgecolor="#cccccc", fontsize=9.5, loc="upper left", framealpha=0.95)
 
             plt.tight_layout()
-            out_plot = "/home/duc/Raptor_UAV/Virgo_RL/snapshots/virgo_figure8_wind_trajectory.png"
+            out_plot = os.path.join(REPO_DIR, "snapshots", "virgo_figure8_wind_trajectory.png")
             plt.savefig(out_plot, dpi=300, facecolor="white")
             print(f"--> [PLOT] Saved publication-grade 3D Figure-8 benchmark plot (white background, 300 DPI) to: {out_plot}")
         except Exception as e:

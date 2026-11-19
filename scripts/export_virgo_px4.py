@@ -215,9 +215,10 @@ inline void virgo_allocate_actuators(
 
 if __name__ == "__main__":
     import argparse
+    REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", type=str, default="/home/duc/Raptor_UAV/Virgo_RL/checkpoints/virgo_ppo_best.pt")
-    parser.add_argument("--out-dir", type=str, default="/home/duc/Raptor_UAV/Virgo_RL/px4_integration")
+    parser.add_argument("--ckpt", type=str, default=os.path.join(REPO_DIR, "checkpoints", "virgo_isaaclab_best.pt"))
+    parser.add_argument("--out-dir", type=str, default=os.path.join(REPO_DIR, "px4_integration"))
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)

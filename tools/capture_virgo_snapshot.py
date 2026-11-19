@@ -10,6 +10,12 @@ app_launcher = AppLauncher(headless=True, enable_cameras=True)
 simulation_app = app_launcher.app
 
 import os
+import sys
+
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_DIR)
+sys.path.insert(0, os.path.join(REPO_DIR, "src"))
+
 import torch
 import torchvision.io
 import isaaclab.sim as sim_utils

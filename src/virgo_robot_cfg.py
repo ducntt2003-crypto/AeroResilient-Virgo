@@ -15,7 +15,8 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
 # Path to the generated USD asset (supports both relative repo path and absolute system path)
-LOCAL_USD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "Virgo_USDF_V2", "AUV_USDF_V2.usd")
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+LOCAL_USD = os.path.join(REPO_ROOT, "assets", "Virgo_USDF_V2", "AUV_USDF_V2.usd")
 FALLBACK_USD = "/home/duc/Raptor_UAV/Virgo_USDF_V2/AUV_USDF_V2.usd"
 VIRGO_USD_PATH = LOCAL_USD if os.path.exists(LOCAL_USD) else FALLBACK_USD
 

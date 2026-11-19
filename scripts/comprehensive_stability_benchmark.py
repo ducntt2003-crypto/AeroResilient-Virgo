@@ -11,16 +11,22 @@ Tests 12-DOF MorphQuad under extreme aerodynamic and physical stress tests:
 """
 
 import os
+import sys
 import math
 import time
 import argparse
 import json
 
+# Ensure repository root and src are on sys.path
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_DIR)
+sys.path.insert(0, os.path.join(REPO_DIR, "src"))
+
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Virgo Comprehensive Stability Benchmark")
 parser.add_argument("--num-envs", type=int, default=16, help="Parallel testing environments")
-parser.add_argument("--checkpoint", type=str, default="/home/duc/Raptor_UAV/Virgo_RL/checkpoints/virgo_isaaclab_best.pt")
+parser.add_argument("--checkpoint", type=str, default=os.path.join(REPO_DIR, "checkpoints", "virgo_isaaclab_best.pt"))
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 

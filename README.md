@@ -232,20 +232,20 @@ conda activate env_isaaclab
 ### 2. Run 3D GUI Evaluation (Single-Command)
 Launch the interactive 3D evaluation with emerald Figure-8 track ribbon, crimson waypoint, 3D wind streamline particles, and overhead compass arrow:
 ```bash
-DISPLAY=:0 /home/duc/IsaacLab/isaaclab.sh -p run_virgo_figure8_wind_test.py --loop
+DISPLAY=:0 /home/duc/IsaacLab/isaaclab.sh -p scripts/run_virgo_figure8_wind_test.py --loop
 ```
 * **Mouse Controls**: Left-Click to orbit | Middle-Click to pan | Right-Click to zoom.
 
 ### 3. Train with 256 Drone Swarm on GPU
 Run massive parallel PPO training across 256 environments in Isaac Sim GUI:
 ```bash
-DISPLAY=:0 /home/duc/IsaacLab/isaaclab.sh -p train_virgo_isaaclab.py --num-envs 256 --total-timesteps 500000 --resume
+DISPLAY=:0 /home/duc/IsaacLab/isaaclab.sh -p scripts/train_virgo_isaaclab.py --num-envs 256 --total-timesteps 500000 --resume
 ```
 
 ### 4. Headless Benchmark Execution
 Execute the automated 80-second benchmark and update the structured JSON report card:
 ```bash
-/home/duc/IsaacLab/isaaclab.sh -p run_virgo_figure8_wind_test.py --headless --trajectory-time 80.0
+/home/duc/IsaacLab/isaaclab.sh -p scripts/run_virgo_figure8_wind_test.py --headless --trajectory-time 80.0
 ```
 
 ---
@@ -255,7 +255,7 @@ Execute the automated 80-second benchmark and update the structured JSON report 
 The repository includes an autonomous C++ code generation pipeline that exports the neural actor network and the null-space allocation matrix into pure, zero-dependency C++ headers:
 
 ```bash
-python export_virgo_px4.py
+python scripts/export_virgo_px4.py
 ```
 
 Generated headers:
@@ -270,27 +270,46 @@ These headers compile directly into PX4 Autopilot firmware module (`src/modules/
 
 ```
 AeroResilient-Virgo/
-├── assets/
-│   └── Virgo_USDF_V2/                        # Complete 3D CAD/USD robot asset
-│       └── AUV_USDF_V2.usd
-├── docs/
-│   └── media/
-│       ├── virgo_figure8_demonstration.gif   # 3D Figure-8 flight demonstration GIF
-│       └── virgo_256_swarm_training.gif      # 256 parallel drone training swarm GIF
-├── checkpoints/
-│   └── virgo_isaaclab_best.pt                # Trained best neural policy checkpoint
-├── snapshots/
-│   ├── virgo_figure8_wind_trajectory.png     # Publication-grade white background benchmark plot
+├── src/                                      # Core library & physics configuration
+│   ├── virgo_env_isaaclab.py                 # Isaac Lab DirectRLEnv for 12-DOF MorphQuad
+│   └── virgo_robot_cfg.py                    # Articulation & USD asset loader
+├── scripts/                                  # Primary simulation & deployment pipelines
+│   ├── run_virgo_figure8_wind_test.py        # 3D interactive GUI evaluation & benchmark
+│   ├── train_virgo_isaaclab.py               # Massively parallel GPU PPO training engine
+│   ├── export_virgo_px4.py                   # Automated zero-dependency PX4 C++ exporter
+│   └── comprehensive_stability_benchmark.py  # 6-phase industrial stress benchmark
+├── tools/                                    # Utilities, renderers, and visual diagnostics
+│   ├── visualize_virgo_gui.py                # Standalone 3D simulation GUI viewer
+│   ├── render_snapshots.py                   # Multi-configuration photo-render script
+│   ├── capture_virgo_snapshot.py             # Tiled camera rendering utility
+│   ├── auto_curriculum_training_loop.py      # Automated curriculum learning runner
+│   └── generate_architecture_diagram.py     # System architecture diagram generator
+├── tests/                                    # Unit and physics verification tests
+│   ├── test_virgo_env_isaaclab.py            # Environment step & reward sanity tests
+│   ├── test_virgo_spawn.py                   # USD scene and asset spawning test
+│   ├── test_hover_multibody.py               # Hover thrust balance physics test
+│   └── test_multibody_forces.py              # Multibody link-frame force tester
+├── legacy/                                   # Early CPU / NumPy baseline prototype
+│   ├── virgo_env.py                          # NumPy flight environment
+│   ├── virgo_kinematics_and_allocation.py    # Kinematic allocation baseline
+│   ├── train_virgo_rl.py                     # CPU RL training script
+│   └── evaluate_virgo_rl.py                  # Static plot evaluation
+├── assets/                                   # 3D USD robot assets
+│   └── Virgo_USDF_V2/                        # Articulated MorphQuad USD CAD model
+├── checkpoints/                              # Trained neural policy checkpoints
+│   └── virgo_isaaclab_best.pt                # Best trained PPO model weights
+├── snapshots/                                # Publication-grade plots & reports
+│   ├── virgo_system_architecture.png         # High-res system architecture diagram
+│   ├── virgo_figure8_wind_trajectory.png     # 300 DPI trajectory tracking plot
 │   ├── virgo_training_curve.png              # PPO convergence curve
 │   └── benchmark_summary.json                # Structured evaluation report card
-├── px4_integration/
+├── px4_integration/                          # Embedded C++ headers for Pixhawk
 │   ├── virgo_policy.h                        # Embedded C++ neural policy
-│   └── virgo_allocation.h                    # Embedded C++ thrust allocation
-├── virgo_env_isaaclab.py                     # Isaac Lab DirectRLEnv for 12-DOF MorphQuad
-├── virgo_robot_cfg.py                        # Articulation and USD asset configuration
-├── train_virgo_isaaclab.py                   # Multi-GPU parallel PPO training engine
-├── run_virgo_figure8_wind_test.py            # Standalone 3D visual evaluation benchmark
-└── export_virgo_px4.py                       # Automated PX4 C++ code generator
+│   └── virgo_allocation.h                    # Embedded C++ null-space allocator
+└── docs/                                     # Documentation, media, and papers
+    ├── media/                                # Optimized demonstration & swarm GIFs
+    ├── papers/                               # Reference arXiv research paper
+    └── optimize_media.py                     # High-efficiency GIF compressor
 ```
 
 ---

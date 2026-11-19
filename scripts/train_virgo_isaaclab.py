@@ -8,9 +8,15 @@ Features:
 """
 
 import os
+import sys
 import time
 import math
 import argparse
+
+# Ensure repository root and src are on sys.path
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_DIR)
+sys.path.insert(0, os.path.join(REPO_DIR, "src"))
 
 from isaaclab.app import AppLauncher
 
@@ -21,7 +27,7 @@ parser.add_argument("--num-steps", type=int, default=64, help="Rollout steps per
 parser.add_argument("--learning-rate", type=float, default=3e-4, help="Learning rate")
 parser.add_argument("--capture-snapshots", action="store_true", default=False, help="Periodically save render snapshots")
 parser.add_argument("--snapshot-interval", type=int, default=10, help="Updates between snapshot captures")
-parser.add_argument("--save-dir", type=str, default="/home/duc/Raptor_UAV/Virgo_RL/checkpoints")
+parser.add_argument("--save-dir", type=str, default=os.path.join(REPO_DIR, "checkpoints"))
 parser.add_argument("--live-plot", action="store_true", default=False, help="Display live real-time convergence plot on desktop")
 parser.add_argument("--resume", action="store_true", default=False, help="Resume training from latest best checkpoint")
 parser.add_argument("--r-pos-scale", type=float, default=4.0, help="Weight scale for position error reward")
