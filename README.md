@@ -46,48 +46,23 @@ Standard multirotors suffer from fundamental **underactuation**: to produce hori
 
 **AeroResilient-Virgo** solves this challenge by developing an end-to-end Reinforcement Learning and optimal null-space thrust vectoring framework for a **12-DOF Coaxial MorphQuad UAV** ([Tzoumas Lab, arXiv:2607.02764](https://arxiv.org/abs/2607.02764)):
 * **16 Actuators**: 8 coaxial counter-rotating brushless motors (112 N total thrust) + 8 Dynamixel smart servos providing active 2-DOF tilt-rotors on all 4 arms.
-* **Decoupled 6-DOF Flight**: Pure omnidirectional force generation in link frame, enabling rapid lateral evasions and wind cancellation while maintaining **dead-level attitude ($\text{roll} = 0^\circ, \; \text{pitch} = 0^\circ$)**.
-* **Autonomous Tangent Heading Alignment**: Mũi drone xoay mượt mà theo tiếp tuyến vector vận tốc ($\psi_d(t) = \operatorname{atan2}(v_y, v_x)$) với sai số yaw chỉ $1.8^\circ$.
-* **Robustness under Beaufort Scales 1–6**: Rejecting turbulent multi-frequency gusts up to $19.6\,\text{m/s}$ ($\approx 71\,\text{km/h}$) and relentless $15\,\text{N}$ push impacts every $1.4\,\text{s}$ with **0.0% crash rate**.
+* **Decoupled 6-DOF Flight**: Pure omnidirectional force generation in link frame, enabling rapid lateral evasions and wind cancellation while maintaining **dead-level attitude ($\text{roll} = 0^\circ, \text{pitch} = 0^\circ$)**.
+* **Autonomous Tangent Heading Alignment**: Mũi drone xoay mượt mà theo tiếp tuyến vector vận tốc ($\psi_d(t) = \text{atan2}(v_y, v_x)$) với sai số yaw chỉ $1.8^\circ$.
+* **Robustness under Beaufort Scales 1–6**: Rejecting turbulent multi-frequency gusts up to $19.6\text{ m/s}$ ($\approx 71\text{ km/h}$) and relentless $15\text{ N}$ push impacts every $1.4\text{ s}$ with **0.0% crash rate**.
 * **Zero-Dependency PX4 C++ Deployment**: Direct compilation to standalone C++ headers (`virgo_policy.h`, `virgo_allocation.h`) for Pixhawk autopilot hardware.
 
 ---
 
 ## 📐 System Architecture & Mathematical Formulation
 
-```mermaid
-flowchart TD
-    subgraph Guidance ["1. 3D Lemniscate Guidance"]
-        A["Desired Trajectory Generator<br>r_d(t), v_d(t), a_d(t), psi_d(t)"]
-    end
-
-    subgraph ForceSynthesizer ["2. Translation Force Synthesis"]
-        B["PID + Centripetal Feedforward<br>F_cmd,w = m a_d + K_p e_p + K_d e_v + K_i int(e_p)dt"]
-        C["Quaternion Body Frame Rotation<br>F_cmd,b = R_BW(q_w) F_cmd,w (Clamp +-32 N)"]
-    end
-
-    subgraph AttitudeControl ["3. Global Lyapunov Attitude Leveling"]
-        D["Leveling Torques (Roll & Pitch = 0)<br>tau_x = -8.0 z_by - 1.5 w_x<br>tau_y =  8.0 z_bx - 1.5 w_y"]
-        E["Tangent Heading Yaw Torque<br>tau_z = 4.0(psi_d - psi) + 1.0(r_d - w_z)"]
-    end
-
-    subgraph Allocation ["4. Constrained Null-Space Allocator"]
-        F["Pseudo-Inverse Mapping<br>t = M_pinv W_des + N(M) c_0"]
-        G["Physical Constraints Enforcement<br>t_z,i >= 1.0 N, alpha, beta in [-37°, +37°]<br>1st-Order Low-Pass Filter (cutoff 15 Hz)"]
-    end
-
-    subgraph Physics ["5. Distributed PhysX Multi-Body Dynamics"]
-        H["Root BODY Link Wrench Composer<br>Link Frame is_global=False"]
-        I["Isaac Sim 5.1 / Isaac Lab GPU Physics"]
-    end
-
-    A --> B --> C --> F
-    A --> D & E --> F
-    F --> G --> H --> I
-```
+<div align="center">
+<img src="snapshots/virgo_system_architecture.png" alt="AeroResilient-Virgo System Architecture" width="100%"/>
+<br>
+<em><b>Figure 1:</b> Publication-grade system architecture and mathematical control pipeline of AeroResilient-Virgo: (1) 3D Lemniscate Guidance and Tangent Heading Alignment, (2) Translation Force Synthesis with anti-windup clamp, (3) Global Lyapunov Attitude Leveling, (4) Constrained Null-Space Allocator with positive vertical lift constraint and 15 Hz mechanical filter, (5) NVIDIA Isaac Lab PhysX distributed multi-body simulation.</em>
+</div>
 
 ### 1. Actuation Model & Link-Frame Wrench Composition
-Each of the 4 arms houses an outer gimbal servo ($\alpha_i$, revolving around the arm axis) and an inner gimbal servo ($\beta_i$, tilting the motor shaft), driving 2 coaxial counter-rotating propellers delivering arm thrust $T_i \in [0.0, 28.0]\,\text{N}$.
+Each of the 4 arms houses an outer gimbal servo ($\alpha_i$, revolving around the arm axis) and an inner gimbal servo ($\beta_i$, tilting the motor shaft), driving 2 coaxial counter-rotating propellers delivering arm thrust $T_i \in [0.0, 28.0]\text{ N}$.
 
 The delivered thrust vector for arm $i$ in body frame is:
 
@@ -95,7 +70,7 @@ $$
 \mathbf{t}_{b, i} = \begin{bmatrix} t_{bx, i} \\ t_{by, i} \\ t_{bz, i} \end{bmatrix} = \begin{bmatrix} T_i \sin\alpha_i \cos\beta_i \\ -T_i \sin\beta_i \\ T_i \cos\alpha_i \cos\beta_i \end{bmatrix}
 $$
 
-The total commanded wrench $\mathbf{w}_{\text{des}} = \left[\mathbf{f}_{\text{cmd}, b}^T, \; \boldsymbol{\tau}_{\text{cmd}, b}^T\right]^T \in \mathbb{R}^6$ is mapped to the 12 virtual thrust components $\mathbf{t} = \left[\mathbf{t}_{b, 1}^T, \dots, \mathbf{t}_{b, 4}^T\right]^T \in \mathbb{R}^{12}$ via allocation matrix $\mathbf{M} \in \mathbb{R}^{6 \times 12}$:
+The total commanded wrench $\mathbf{w}_{\text{des}} = \left[\mathbf{f}_{\text{cmd}, b}^T, \boldsymbol{\tau}_{\text{cmd}, b}^T\right]^T \in \mathbb{R}^6$ is mapped to the 12 virtual thrust components $\mathbf{t} = \left[\mathbf{t}_{b, 1}^T, \dots, \mathbf{t}_{b, 4}^T\right]^T \in \mathbb{R}^{12}$ via allocation matrix $\mathbf{M} \in \mathbb{R}^{6 \times 12}$:
 
 $$
 \begin{aligned}
@@ -106,17 +81,17 @@ $$
 
 ### 2. Critical Physics Fixes for Zero-Tilt Stability
 * **Link-Frame Semantics in Isaac Lab**: Isaac Lab's `permanent_wrench_composer.set_forces_and_torques` executes `apply_forces_and_torques_at_position(..., is_global=False)`, strictly evaluating wrenches in the **link (body) frame**. Delivering world vectors caused a catastrophic double-rotation ($\mathbf{R}^2$), inverting horizontal forces at turns. We compute and deliver wrenches strictly in the body frame with `is_global=False`.
-* **Positive Vertical Thrust Constraint**: Unconstrained pseudo-inversion produced negative vertical components ($t_{z, i} < 0$) on inboard arms during high-rate yaw-lateral maneuvers, forcing `atan2` to flip servos upside down ($\pm 180^\circ$). We enforce $t_{z, i} \ge 1.0\,\text{N}$ and clip gimbals to physical Dynamixel limits ($\pm 37^\circ$).
-* **1st-Order Mechanical Bandwidth Filter ("Độ Đầm")**: High-frequency servo chattering is eliminated via an exponential low-pass filter ($\gamma = 0.65$, cutoff $\approx 15\,\text{Hz}$), matching physical Dynamixel XL/XC actuator dynamics:
+* **Positive Vertical Thrust Constraint**: Unconstrained pseudo-inversion produced negative vertical components ($t_{z, i} < 0$) on inboard arms during high-rate yaw-lateral maneuvers, forcing `atan2` to flip servos upside down ($\pm 180^\circ$). We enforce $t_{z, i} \ge 1.0\text{ N}$ and clip gimbals to physical Dynamixel limits ($\pm 37^\circ$).
+* **1st-Order Mechanical Bandwidth Filter ("Độ Đầm")**: High-frequency servo chattering is eliminated via an exponential low-pass filter ($\gamma = 0.65$, cutoff $\approx 15\text{ Hz}$), matching physical Dynamixel XL/XC actuator dynamics:
 
 $$
 \boldsymbol{\alpha}_k = (1 - \gamma) \boldsymbol{\alpha}_{k-1} + \gamma \boldsymbol{\alpha}_{\text{raw}}, \quad \boldsymbol{\beta}_k = (1 - \gamma) \boldsymbol{\beta}_{k-1} + \gamma \boldsymbol{\beta}_{\text{raw}}
 $$
 
-* **Steady-State Wind Rejection**: Clamping horizontal translation forces to $\pm 32.0\,\text{N}$ (leveraging the $112\,\text{N}$ total motor capability) and introducing an anti-windup position integral buffer:
+* **Steady-State Wind Rejection**: Clamping horizontal translation forces to $\pm 32.0\text{ N}$ (leveraging the $112\text{ N}$ total motor capability) and introducing an anti-windup position integral buffer:
 
 $$
-\mathbf{f}_{\text{cmd}, w}^{xy} = \operatorname{clamp}\left( m \mathbf{a}_{d, w}^{xy} + 10.0\,\mathbf{e}_p^{xy} + 4.5\,\mathbf{e}_v^{xy} + 3.5 \int \mathbf{e}_p^{xy} dt + 5.0\,\mathbf{a}_{\text{action}}^{xy}, \; -32.0\,\text{N}, \; +32.0\,\text{N} \right)
+\mathbf{f}_{\text{cmd}, w}^{xy} = \text{clamp}\left( m \mathbf{a}_{d, w}^{xy} + 10.0 \mathbf{e}_p^{xy} + 4.5 \mathbf{e}_v^{xy} + 3.5 \int \mathbf{e}_p^{xy} dt + 5.0 \mathbf{a}_{\text{action}}^{xy}, \quad -32.0\text{ N}, \quad +32.0\text{ N} \right)
 $$
 
 ---
@@ -133,9 +108,9 @@ The policy receives a fully decoupled, normalized observation vector:
 * **Target Velocity in Body Frame** $\mathbf{v}_{d, b} \in \mathbb{R}^3$
 * **Orientation Error Quaternion** $\mathbf{q}_{\text{err}} = \mathbf{q}_w^{-1} \otimes \mathbf{q}_{d, w} \in \mathbb{R}^4$
 * **Current Arm Thrusts** $\mathbf{T} / 28.0 \in \mathbb{R}^4$
-* **Current Servo Angles** $\boldsymbol{\alpha} / \alpha_{\max}, \; \boldsymbol{\beta} / \beta_{\max} \in \mathbb{R}^8$
+* **Current Servo Angles** $\boldsymbol{\alpha} / \alpha_{\max}, \boldsymbol{\beta} / \beta_{\max} \in \mathbb{R}^8$
 * **Target Feedforward Acceleration in Body Frame** $\mathbf{a}_{d, b} \in \mathbb{R}^3$
-* **Future Preview Lookahead Error ($t + 0.6\,\text{s}$)** $\mathbf{e}_{\text{lookahead}, b} \in \mathbb{R}^3$
+* **Future Preview Lookahead Error ($t + 0.6\text{ s}$)** $\mathbf{e}_{\text{lookahead}, b} \in \mathbb{R}^3$
 * **Normalized Trajectory Phase** $\sin(\omega t) \in \mathbb{R}^1$
 
 ### 2. Multi-Objective Reward Function
@@ -144,41 +119,37 @@ $$
 R = R_{\text{pos}} + R_{\text{level}} + R_{\text{yaw}} + R_{\text{rate}} + R_{\text{energy}} + R_{\text{smooth}}
 $$
 
-* **Dual-Plane Restoring Position Reward**:
+#### 1. Dual-Plane Restoring Position Reward
+$$
+R_{\text{pos}} = \left(-4.0 \|\mathbf{e}_{xy}\| + 6.0 e^{-\|\mathbf{e}_{xy}\|^2 / 0.18}\right) + \left(-6.0 |e_z| + 4.0 e^{-e_z^2 / 0.08}\right)
+$$
 
-  $$
-  R_{\text{pos}} = \left(-4.0 \|\mathbf{e}_{xy}\| + 6.0 e^{-\|\mathbf{e}_{xy}\|^2 / 0.18}\right) + \left(-6.0 |e_z| + 4.0 e^{-e_z^2 / 0.08}\right)
-  $$
+#### 2. Decoupled Attitude Leveling (Dead-Level Flight)
+$$
+R_{\text{level}} = -8.0 (z_{bx}^2 + z_{by}^2) + 3.0 e^{-20.0 (z_{bx}^2 + z_{by}^2)}
+$$
 
-* **Decoupled Attitude Leveling**:
+#### 3. Tangent Heading Yaw Alignment
+$$
+R_{\text{yaw}} = 3.0 \cos(\psi_d - \psi) + 2.0 e^{-6.0 \max(0, 1 - \cos(\psi_d - \psi))}
+$$
 
-  $$
-  R_{\text{level}} = -8.0 (z_{bx}^2 + z_{by}^2) + 3.0 e^{-20.0 (z_{bx}^2 + z_{by}^2)}
-  $$
-
-* **Tangent Heading Yaw Tracking**:
-
-  $$
-  R_{\text{yaw}} = 3.0 \cos(\psi_d - \psi) + 2.0 e^{-6.0 \max\left(0, \, 1 - \cos(\psi_d - \psi)\right)}
-  $$
-
-* **Actuator Smoothness & Energy Optimization**:
-
-  $$
-  R_{\text{energy}} = -0.05 \sum_{i=1}^4 \left(\|\boldsymbol{\alpha}_i\|^2 + \|\boldsymbol{\beta}_i\|^2\right) - 0.02 \sum_{i=1}^4 \left(\|\dot{\boldsymbol{\alpha}}_i\|^2 + \|\dot{\boldsymbol{\beta}}_i\|^2\right)
-  $$
+#### 4. Actuator Smoothness & Energy Optimization
+$$
+R_{\text{energy}} = -0.05 \sum_{i=1}^4 \left(\|\boldsymbol{\alpha}_i\|^2 + \|\boldsymbol{\beta}_i\|^2\right) - 0.02 \sum_{i=1}^4 \left(\|\dot{\boldsymbol{\alpha}}_i\|^2 + \|\dot{\boldsymbol{\beta}}_i\|^2\right)
+$$
 
 ---
 
 ## 📊 Experimental Results & Benchmark
 
 ### 1. 3D Lemniscate of Bernoulli Trajectory Tracking
-Evaluated on an $8.0\,\text{m} \times 3.2\,\text{m} \times 0.8\,\text{m}$ 3D Lemniscate path over 80 continuous seconds under escalating Beaufort wind disturbances.
+Evaluated on an $8.0\text{ m} \times 3.2\text{ m} \times 0.8\text{ m}$ 3D Lemniscate path over 80 continuous seconds under escalating Beaufort wind disturbances.
 
 <div align="center">
 <img src="snapshots/virgo_figure8_wind_trajectory.png" alt="3D Trajectory & Tracking Error Benchmark" width="98%"/>
 <br>
-<em><b>Figure 1:</b> Publication-grade 300 DPI evaluation plot: (a) 3D Figure-8 flight trajectory under dynamic disturbances. (b) Position tracking error $e_{\text{pos}}(t)$ and wind speed $V_{\text{wind}}(t)$ partitioned across the four Beaufort disturbance regimes (Total RMSE: 45.4 cm, Crash Rate: 0.0%).</em>
+<em><b>Figure 2:</b> Publication-grade 300 DPI evaluation plot: (a) 3D Figure-8 flight trajectory under dynamic disturbances. (b) Position tracking error <i>e</i><sub>pos</sub>(<i>t</i>) and wind speed <i>V</i><sub>wind</sub>(<i>t</i>) partitioned across the four Beaufort disturbance regimes (Total RMSE: 45.4 cm, Crash Rate: 0.0%).</em>
 </div>
 
 ### 2. Quantitative Performance Across Beaufort Scales
@@ -192,20 +163,20 @@ Evaluated on an $8.0\,\text{m} \times 3.2\,\text{m} \times 0.8\,\text{m}$ 3D Lem
 | **Overall 80s Mission** | Full 4-Phase Trajectory Cycle | **45.4 cm** | **< 0.35° Avg** | **100% Completion (0% Crash)** |
 
 * **Zero-Tilt Verification**: Across the entire 80 seconds, maximum roll and pitch tilt never exceeded $1.16^\circ$, maintaining near-perfect horizontal camera and payload stability.
-* **Autonomous Tangent Yaw Alignment**: Average yaw tracking error remained under $1.8^\circ$ throughout all apex turns ($X = \pm 4.0\,\text{m}$).
+* **Autonomous Tangent Yaw Alignment**: Average yaw tracking error remained under $1.8^\circ$ throughout all apex turns ($X = \pm 4.0\text{ m}$).
 
 ### 3. PPO Training Convergence Curve
 <div align="center">
 <img src="snapshots/virgo_training_curve.png" alt="Training Curve" width="75%"/>
 <br>
-<em><b>Figure 2:</b> Training progression across 250,000 environment steps showing reward maximization and position error convergence.</em>
+<em><b>Figure 3:</b> Training progression across 250,000 environment steps showing reward maximization and position error convergence.</em>
 </div>
 
 ---
 
 ## 🔮 Future Roadmap: Hardware Redesign & Control Upgrades for Beaufort 6–10
 
-Operating under **Beaufort Scale 7 to 10** ($14.0 - 28.4\,\text{m/s}$, equivalent to **$50 - 102\,\text{km/h}$ - Tropical Storm / Violent Gale**) introduces extreme aerodynamic challenges: aerodynamic drag forces scale with the square of velocity ($F_{\text{drag}} \propto v_{\text{wind}}^2$), reaching 50 – 80 N of sustained lateral force, accompanied by severe rotor vortex ring states (VRS), aerodynamic blade flutter, and turbulent cross-shear.
+Operating under **Beaufort Scale 7 to 10** ($14.0 - 28.4\text{ m/s}$, equivalent to **$50 - 102\text{ km/h}$ - Tropical Storm / Violent Gale**) introduces extreme aerodynamic challenges: aerodynamic drag forces scale with the square of velocity ($F_{\text{drag}} \propto v_{\text{wind}}^2$), reaching 50 – 80 N of sustained lateral force, accompanied by severe rotor vortex ring states (VRS), aerodynamic blade flutter, and turbulent cross-shear.
 
 To master extreme Beaufort 6–10 environments, we propose the following multi-disciplinary hardware and algorithmic upgrades:
 
@@ -229,9 +200,9 @@ flowchart TD
 ```
 
 ### 1. Aerodynamic & Structural Hardware Redesign
-* **Streamlined Low-Drag Airframe Fairing**: The current open-frame chassis exhibits a high drag area ($C_d A \approx 0.09\,\text{m}^2$). Enclosing the central avionics and arm gimbals in teardrop-profile carbon-fiber fairings will drop $C_d$ to $< 0.28$, reducing lateral drag force by **65%** at 25 m/s.
+* **Streamlined Low-Drag Airframe Fairing**: The current open-frame chassis exhibits a high drag area ($C_d A \approx 0.09\text{ m}^2$). Enclosing the central avionics and arm gimbals in teardrop-profile carbon-fiber fairings will drop $C_d$ to $< 0.28$, reducing lateral drag force by **65%** at 25 m/s.
 * **Next-Gen Coaxial Powertrain ($T/W > 4.5$)**: Upgrading to high-voltage brushless motors (e.g., T-Motor U8 II / F90 PRO) with ultra-rigid carbon-fiber propellers increases maximum combined thrust from 112 N to **> 220 N**, providing sufficient control authority to overcome 70 N wind drag while retaining 50 N of vertical lift reserve.
-* **Harmonic Drive / High-Torque Smart Servos**: Upgrading the gimbal servos to Dynamixel XH540 or brushless harmonic drives (zero-backlash, $> 120\,\text{rpm}$ slew rate, holding torque $> 10\,\text{Nm}$) ensures the gimbals will not be back-driven by dynamic blade pitch moments during 100 km/h gusts.
+* **Harmonic Drive / High-Torque Smart Servos**: Upgrading the gimbal servos to Dynamixel XH540 or brushless harmonic drives (zero-backlash, $> 120\text{ rpm}$ slew rate, holding torque $> 10\text{ Nm}$) ensures the gimbals will not be back-driven by dynamic blade pitch moments during 100 km/h gusts.
 * **Titanium Grade-5 Gimbal Shafts**: Prevents arm flexure and micro-vibrations under severe cross-shear aerodynamic loads.
 
 ### 2. Advanced Control & Algorithmic Upgrades
@@ -245,7 +216,7 @@ flowchart TD
 
 ### Prerequisites
 - Ubuntu 22.04 LTS
-- NVIDIA GPU with $\ge 12\,\text{GB}$ VRAM (Tested on RTX 4090 Laptop GPU, Driver 580.178+)
+- NVIDIA GPU with $\ge 12\text{ GB}$ VRAM (Tested on RTX 4090 Laptop GPU, Driver 580.178+)
 - [NVIDIA Isaac Lab](https://isaac-sim.github.io/IsaacLab/) & Miniconda
 
 ### 1. Installation
