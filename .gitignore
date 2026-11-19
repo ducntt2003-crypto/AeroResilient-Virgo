@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary / scratch files
+scratch/
+*.log
+*.tmp
+.DS_Store
+
+# Raw screen recordings exceeding GitHub 100MB limit
+# (Optimized publication-ready media are tracked in docs/media/)
+Video/
+docs/media/test_*
+Video/thumb_*
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

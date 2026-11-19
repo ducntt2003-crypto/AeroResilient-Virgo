@@ -1,0 +1,69 @@
+{
+  "test_1_impulse_recovery": {
+    "max_overshoot_cm": 361.2,
+    "settling_time_s": 2.0,
+    "final_error_cm": 212.9,
+    "passed": false
+  },
+  "test_2_wind_sweep": {
+    "results": {
+      "Beaufort 1: Light Air (1.0 m/s)": {
+        "pos_rmse_cm": 117.8,
+        "att_rmse_deg": 42.9,
+        "peak_beta_deg": 77.3
+      },
+      "Beaufort 3: Gentle Breeze (4.5 m/s)": {
+        "pos_rmse_cm": 112.7,
+        "att_rmse_deg": 57.1,
+        "peak_beta_deg": 83.4
+      },
+      "Beaufort 5: Fresh Breeze (9.0 m/s)": {
+        "pos_rmse_cm": 121.3,
+        "att_rmse_deg": 46.4,
+        "peak_beta_deg": 70.6
+      },
+      "Beaufort 6: Strong Breeze (13.8 m/s, 50 km/h)": {
+        "pos_rmse_cm": 110.5,
+        "att_rmse_deg": 48.7,
+        "peak_beta_deg": 87.4
+      },
+      "Beaufort 7: Moderate Gale (17.1 m/s, 61.5 km/h)": {
+        "pos_rmse_cm": 119.7,
+        "att_rmse_deg": 51.3,
+        "peak_beta_deg": 86.5
+      }
+    },
+    "passed": false
+  },
+  "test_3_singularity_traversal": {
+    "modes": {
+      "Upright 0\u00b0": {
+        "pos_rmse_cm": 75.5
+      },
+      "Tilted 45\u00b0": {
+        "pos_rmse_cm": 103.4
+      },
+      "Wall-Facing 90\u00b0": {
+        "pos_rmse_cm": 133.6
+      },
+      "Inverted 180\u00b0": {
+        "pos_rmse_cm": 44.6
+      }
+    },
+    "passed": false
+  },
+  "test_4_motor_failure": {
+    "altitude_m": 1.33,
+    "pos_err_cm": 118.3,
+    "passed": false
+  },
+  "test_5_payload_drop": {
+    "pop_up_cm": 51.1,
+    "settled_z_m": 0.8,
+    "passed": false
+  },
+  "test_6_trajectory_tracking": {
+    "rmse_cm": 168.6,
+    "passed": false
+  }
+}
