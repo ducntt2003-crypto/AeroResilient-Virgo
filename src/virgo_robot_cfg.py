@@ -51,12 +51,19 @@ VIRGO_CFG = ArticulationCfg(
         joint_vel={".*": 0.0},
     ),
     actuators={
-        "gimbal_servos": ImplicitActuatorCfg(
-            joint_names_expr=["ARM_MOTOR_.*", "SHAFT_MOTOR_.*"],
-            effort_limit_sim=10.0,       # Dynamixel XC330 / XL330 peak torque
-            velocity_limit_sim=25.0,    # Max servo angular rate
-            stiffness=250.0,            # High stiffness PD drive for precision gimbal tracking
+        "outer_gimbal_servos": ImplicitActuatorCfg(
+            joint_names_expr=["ARM_MOTOR_.*"],
+            effort_limit_sim=2.5,       # Dynamixel XC330-M288-T + Timing Belt: Peak torque 2.5 N*m
+            velocity_limit_sim=10.5,    # Speed limit: 10.5 rad/s (600 deg/s)
+            stiffness=250.0,            # High stiffness PD drive for precision outer gimbal tracking
             damping=12.0,               # Enhanced physical damping for steady, jitter-free servo motion
+        ),
+        "inner_gimbal_servos": ImplicitActuatorCfg(
+            joint_names_expr=["SHAFT_MOTOR_.*"],
+            effort_limit_sim=0.8,       # Dynamixel XL330-M288-T inline: Peak torque 0.8 N*m
+            velocity_limit_sim=6.5,     # Speed limit: 6.5 rad/s (366 deg/s)
+            stiffness=200.0,            # High stiffness PD drive for precision inner gimbal tracking
+            damping=8.0,                # Enhanced physical damping for steady inline servo motion
         ),
         "props": ImplicitActuatorCfg(
             joint_names_expr=["PROP_.*"],

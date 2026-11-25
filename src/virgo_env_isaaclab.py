@@ -93,6 +93,12 @@ class VirgoEnvCfg(DirectRLEnvCfg):
     max_thrust_per_arm = 28.0 # N
     max_torque = 12.0   # Nm
 
+    # Hardware Actuator Specifications (Dynamixel XC330 outer / XL330 inner)
+    outer_servo_vel_limit = 10.5   # rad/s (600 deg/s) - Outer axis: XC330-M288-T + Timing belt
+    outer_servo_torque_limit = 2.5 # N*m
+    inner_servo_vel_limit = 6.5    # rad/s (366 deg/s) - Inner axis: XL330-M288-T inline
+    inner_servo_torque_limit = 0.8 # N*m
+
     # Flight Mode
     upright_only: bool = True # True: Always fly upright (Roll=0, Pitch=0), vectoring thrust via servos only
     is_eval: bool = False     # True: Standalone evaluation mode (no divergence reset, continuous loop)
@@ -428,8 +434,16 @@ class VirgoEnv(DirectRLEnv):
         # 1st-Order Low-Pass Filter (EMA) on Servo Angles for High "Độ Đầm" and Smoothness
         # Cutoff frequency ~ 15 Hz matches physical Dynamixel XC330 / XL330 mechanical bandwidth
         gamma_filter = 0.65
-        alphas = (1.0 - gamma_filter) * self._prev_alphas + gamma_filter * alphas_raw
-        betas = (1.0 - gamma_filter) * self._prev_betas + gamma_filter * betas_raw
+        alphas_filtered = (1.0 - gamma_filter) * self._prev_alphas + gamma_filter * alphas_raw
+        betas_filtered = (1.0 - gamma_filter) * self._prev_betas + gamma_filter * betas_raw
+
+        # Hardware Kinematic Slew-Rate Limits:
+        # Outer axis (XC330-M288-T + Belt): max velocity = 10.5 rad/s (600 deg/s)
+        # Inner axis (XL330-M288-T inline): max velocity = 6.5 rad/s (366 deg/s)
+        max_delta_alpha = self.cfg.outer_servo_vel_limit * self.step_dt
+        max_delta_beta = self.cfg.inner_servo_vel_limit * self.step_dt
+        alphas = torch.clamp(alphas_filtered, self._prev_alphas - max_delta_alpha, self._prev_alphas + max_delta_alpha)
+        betas = torch.clamp(betas_filtered, self._prev_betas - max_delta_beta, self._prev_betas + max_delta_beta)
 
         # Dynamic Vertical Decoupling:
         cos_beta = torch.cos(betas)

@@ -88,7 +88,10 @@ $$
 ### 2. Critical Physics Fixes for Zero-Tilt Stability
 * **Link-Frame Semantics in Isaac Lab**: Isaac Lab's `permanent_wrench_composer.set_forces_and_torques` executes `apply_forces_and_torques_at_position(..., is_global=False)`, strictly evaluating wrenches in the **link (body) frame**. Delivering world vectors caused a catastrophic double-rotation ($\mathbf{R}^2$), inverting horizontal forces at turns. We compute and deliver wrenches strictly in the body frame with `is_global=False`.
 * **Positive Vertical Thrust Constraint**: Unconstrained pseudo-inversion produced negative vertical components on inboard arms during high-rate yaw-lateral maneuvers, forcing the inverse kinematics solver to flip servos upside down (±180°). We strictly enforce positive vertical lift $t_{z, i} \ge 1.0\text{ N}$ and constrain gimbal deflections to physical Dynamixel limits (±37°).
-* **1st-Order Mechanical Bandwidth Filter ("Độ Đầm")**: High-frequency servo chattering is eliminated via an exponential low-pass filter ($\gamma = 0.65$, cutoff $\approx 15\text{ Hz}$), matching physical Dynamixel XL/XC actuator dynamics:
+* **1st-Order Mechanical Bandwidth Filter ("Độ Đầm") & Hardware Actuator Constraints**: High-frequency servo chattering is eliminated via an exponential low-pass filter ($\gamma = 0.65$, cutoff $\approx 15\text{ Hz}$), combined with exact hardware velocity and torque saturation calibrated to physical Dynamixel servos:
+  - **Outer axis ($\alpha_i$, `ARM_MOTOR_.*`)**: Dynamixel XC330-M288-T + Timing Belt Transmission. Speed limit: $10.5\text{ rad/s}$ ($600^\circ/\text{s}$), Peak torque: $2.5\text{ N}\cdot\text{m}$.
+  - **Inner axis ($\beta_i$, `SHAFT_MOTOR_.*`)**: Dynamixel XL330-M288-T inline direct drive. Speed limit: $6.5\text{ rad/s}$ ($366^\circ/\text{s}$), Peak torque: $0.8\text{ N}\cdot\text{m}$.
+  - **Kinematic Slew-Rate Clamping**: Instantaneous joint angle commands are bounded by step-wise rate limits $|\Delta \alpha| \le 10.5 \Delta t$ and $|\Delta \beta| \le 6.5 \Delta t$, eliminating actuation shock and back-EMF spikes.
 
 $$
 \boldsymbol{\alpha}_k = (1 - \gamma) \boldsymbol{\alpha}_{k-1} + \gamma \boldsymbol{\alpha}_{\text{raw}}, \quad \boldsymbol{\beta}_k = (1 - \gamma) \boldsymbol{\beta}_{k-1} + \gamma \boldsymbol{\beta}_{\text{raw}}
