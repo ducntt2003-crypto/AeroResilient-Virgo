@@ -20,6 +20,8 @@ import select
 import termios
 import tty
 import threading
+import json
+import socket
 import numpy as np
 import torch
 
@@ -303,6 +305,18 @@ def main():
     kb_term = TerminalKeyboardListener()
     mav_bridge = MavlinkQGCBridge(port=args_cli.mavlink_port)
 
+    # UDP IPC Socket for Dedicated Terminal 3 Flight Controller
+    UDP_BIND_PORT = 9876
+    UDP_CLIENT_PORT = 9877
+    import socket
+    sock_ipc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock_ipc.bind(("127.0.0.1", UDP_BIND_PORT))
+        sock_ipc.setblocking(False)
+        print(f"[IPC] Listening for external controller on 127.0.0.1:{UDP_BIND_PORT}")
+    except Exception as e:
+        print(f"[IPC] Notice: {e}")
+
     # Initialize policy and load trained weights
     agent = ActorCritic(cfg.observation_space, cfg.action_space).to(device)
     if os.path.exists(args_cli.checkpoint):
@@ -352,6 +366,7 @@ def main():
     sim_dt = 0.02
     t_sim = 0.0
     last_hud_time = time.time()
+    last_telem_send = 0.0
     active_source = "Hover"
 
     # Initial camera view nicely framing the drone
@@ -363,7 +378,48 @@ def main():
     print("\n--> Drone is Airborne at (0, 0, 2m)! Click either window and press W/S/A/D to fly!\n")
 
     while simulation_app.is_running() and kb_term.running:
-        # 1. Read input from Isaac Sim 3D Window (Omniverse Se3Keyboard)
+        # 1. Read input from External Dedicated Terminal Controller (UDP port 9876)
+        while True:
+            try:
+                pkt_data, _ = sock_ipc.recvfrom(4096)
+                pkt = json.loads(pkt_data.decode())
+                if "nudge_forward" in pkt:
+                    fwd = float(pkt["nudge_forward"])
+                    curr_target_pos[0] += fwd * math.cos(curr_target_yaw)
+                    curr_target_pos[1] += fwd * math.sin(curr_target_yaw)
+                    active_source = f"CLI Fwd {fwd:+.1f}m"
+                if "nudge_strafe" in pkt:
+                    strf = float(pkt["nudge_strafe"])
+                    curr_target_pos[0] -= strf * math.sin(curr_target_yaw)
+                    curr_target_pos[1] += strf * math.cos(curr_target_yaw)
+                    active_source = f"CLI Strafe {strf:+.1f}m"
+                if "nudge_x" in pkt:
+                    curr_target_pos[0] += float(pkt["nudge_x"])
+                    active_source = f"CLI X {float(pkt['nudge_x']):+.1f}m"
+                if "nudge_y" in pkt:
+                    curr_target_pos[1] += float(pkt["nudge_y"])
+                    active_source = f"CLI Y {float(pkt['nudge_y']):+.1f}m"
+                if "nudge_z" in pkt:
+                    curr_target_pos[2] = torch.clamp(curr_target_pos[2] + float(pkt["nudge_z"]), min=0.6, max=12.0)
+                    active_source = f"CLI Z {float(pkt['nudge_z']):+.1f}m"
+                if "nudge_yaw" in pkt:
+                    curr_target_yaw += float(pkt["nudge_yaw"])
+                    active_source = f"CLI Yaw {math.degrees(float(pkt['nudge_yaw'])):+.1f}°"
+                if pkt.get("hold", False):
+                    active_source = "CLI Hold Hover"
+                if pkt.get("reset", False):
+                    curr_target_pos = torch.tensor([0.0, 0.0, 2.0], device=device)
+                    curr_target_yaw = 0.0
+                    active_source = "CLI Reset"
+                if "wind_mode" in pkt:
+                    kb_term.wind_mode = int(pkt["wind_mode"])
+                    active_source = f"CLI Wind {kb_term.wind_mode}"
+            except (BlockingIOError, socket.error):
+                break
+            except Exception:
+                break
+
+        # 2. Read input from Isaac Sim 3D Window (Omniverse Se3Keyboard)
         win_vx, win_vy, win_vz, win_yaw = 0.0, 0.0, 0.0, 0.0
         if has_se3_kb:
             delta_pose, _ = se3_kb.advance()
@@ -490,13 +546,39 @@ def main():
         servo_a = env._current_alphas[0].cpu().numpy() * (180.0 / math.pi)
         servo_b = env._current_betas[0].cpu().numpy() * (180.0 / math.pi)
 
-        # Smooth Camera Tracking: Follow drone smoothly in 3D
+        # Extract Euler angles
+        qw, qx, qy, qz = cur_quat[0], cur_quat[1], cur_quat[2], cur_quat[3]
+        roll_deg = math.degrees(math.atan2(2.0 * (qw*qx + qy*qz), 1.0 - 2.0 * (qx*qx + qy*qy)))
+        pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, 2.0 * (qw*qy - qz*qx)))))
+        yaw_deg = math.degrees(math.atan2(2.0 * (qw*qz + qx*qy), 1.0 - 2.0 * (qy*qy + qz*qz)))
+
+        # Smooth Chase Camera Tracking: Follow drone smoothly in 3D from behind
         try:
-            cam_eye = [float(cur_pos[0]), float(cur_pos[1]) - 4.5, float(cur_pos[2]) + 2.2]
-            cam_target = [float(cur_pos[0]), float(cur_pos[1]), float(cur_pos[2])]
+            cam_x = float(cur_pos[0]) - 4.5 * math.cos(curr_target_yaw)
+            cam_y = float(cur_pos[1]) - 4.5 * math.sin(curr_target_yaw)
+            cam_z = float(cur_pos[2]) + 2.0
+            cam_eye = [cam_x, cam_y, cam_z]
+            cam_target = [float(cur_pos[0]), float(cur_pos[1]), float(cur_pos[2]) + 0.3]
             env.sim.set_camera_view(eye=cam_eye, target=cam_target)
         except Exception:
             pass
+
+        # Send Live Telemetry to Dedicated Terminal Controller (UDP port 9877)
+        now_telem = time.time()
+        if now_telem - last_telem_send >= 0.08:
+            last_telem_send = now_telem
+            telem_payload = {
+                "pos": [round(float(cur_pos[0]), 2), round(float(cur_pos[1]), 2), round(float(cur_pos[2]), 2)],
+                "target": [round(float(curr_target_pos[0]), 2), round(float(curr_target_pos[1]), 2), round(float(curr_target_pos[2]), 2)],
+                "tilt": [round(roll_deg, 1), round(pitch_deg, 1)],
+                "gimbal": round(float(np.mean(np.abs(servo_b))), 1),
+                "yaw": round(yaw_deg, 1),
+                "time": round(t_sim, 1),
+            }
+            try:
+                sock_ipc.sendto(json.dumps(telem_payload).encode(), ("127.0.0.1", UDP_CLIENT_PORT))
+            except Exception:
+                pass
 
         # Update MAVLink Telemetry to QGroundControl
         mav_bridge.update(cur_pos, cur_vel, cur_quat, servo_a, servo_b)
@@ -504,9 +586,6 @@ def main():
         # On-Screen HUD in Terminal (Every 0.20s)
         if time.time() - last_hud_time >= 0.20:
             last_hud_time = time.time()
-            qw, qx, qy, qz = cur_quat[0], cur_quat[1], cur_quat[2], cur_quat[3]
-            roll_deg = math.degrees(math.atan2(2.0 * (qw*qx + qy*qz), 1.0 - 2.0 * (qx*qx + qy*qy)))
-            pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, 2.0 * (qw*qy - qz*qx)))))
             pos_err = np.linalg.norm(cur_pos - curr_target_pos.cpu().numpy()) * 100.0
 
             qgc_badge = "[QGC LINKED]" if mav_bridge.connected else "[QGC READY]"

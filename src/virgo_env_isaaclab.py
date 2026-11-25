@@ -581,7 +581,10 @@ class VirgoEnv(DirectRLEnv):
         lookahead_err_b = quat_rotate_inverse(q_w, lookahead_err_w)
 
         # 8. Trajectory Periodic Phase Progress [-1, 1]
-        phase_feat = torch.sin((2.0 * math.pi / 20.0) * self._traj_time).unsqueeze(-1)
+        if self.cfg.interactive_mode:
+            phase_feat = torch.zeros(self.num_envs, 1, device=self.device)
+        else:
+            phase_feat = torch.sin((2.0 * math.pi / 20.0) * self._traj_time).unsqueeze(-1)
 
         # 35-Dim Observation Vector (100% Invariant to World Environment Origins):
         obs = torch.cat([
@@ -716,54 +719,106 @@ class VirgoEnv(DirectRLEnv):
         omega_z = 2.0 * omega
         A_x, A_y, A_z, z_0 = 4.0, 1.6, 0.4, 2.0
 
-        if getattr(self.cfg, "is_eval", False):
+        if self.cfg.interactive_mode:
             tau_0 = torch.zeros(num_resets, device=self.device)
+            self._traj_time[env_ids] = 0.0
+            origins = self._terrain.env_origins[env_ids]
+            self._desired_pos_w[env_ids, 0] = origins[:, 0]
+            self._desired_pos_w[env_ids, 1] = origins[:, 1]
+            self._desired_pos_w[env_ids, 2] = origins[:, 2] + z_0
+            self._desired_vel_w[env_ids] = 0.0
+            self._desired_acc_w[env_ids] = 0.0
+            self._desired_quat_w[env_ids] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(num_resets, 1)
+            self._psi_des[env_ids] = 0.0
+            self._desired_yaw_rate[env_ids] = 0.0
+            self._lookahead_pos_w[env_ids] = self._desired_pos_w[env_ids]
+        elif getattr(self.cfg, "is_eval", False):
+            tau_0 = torch.zeros(num_resets, device=self.device)
+            self._traj_time[env_ids] = tau_0
+            origins = self._terrain.env_origins[env_ids]
+            px = origins[:, 0] + A_x * torch.sin(omega * tau_0)
+            py = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_0)
+            pz = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_0)
+            self._desired_pos_w[env_ids, 0] = px
+            self._desired_pos_w[env_ids, 1] = py
+            self._desired_pos_w[env_ids, 2] = pz
+
+            vx = A_x * omega * torch.cos(omega * tau_0)
+            vy = A_y * omega * torch.cos(2.0 * omega * tau_0)
+            vz = A_z * omega_z * torch.cos(omega_z * tau_0)
+            self._desired_vel_w[env_ids, 0] = vx
+            self._desired_vel_w[env_ids, 1] = vy
+            self._desired_vel_w[env_ids, 2] = vz
+
+            psi_des = torch.atan2(vy, vx)
+            self._psi_des[env_ids] = psi_des
+            sp = torch.sin(psi_des * 0.5)
+            cp = torch.cos(psi_des * 0.5)
+            self._desired_quat_w[env_ids, 0] = cp
+            self._desired_quat_w[env_ids, 1] = 0.0
+            self._desired_quat_w[env_ids, 2] = 0.0
+            self._desired_quat_w[env_ids, 3] = sp
+
+            # Analytical Desired Acceleration for Centripetal Feedforward
+            self._desired_acc_w[env_ids, 0] = -A_x * (omega**2) * torch.sin(omega * tau_0)
+            self._desired_acc_w[env_ids, 1] = -2.0 * A_y * (omega**2) * torch.sin(2.0 * omega * tau_0)
+            self._desired_acc_w[env_ids, 2] = -A_z * (omega_z**2) * torch.sin(omega_z * tau_0)
+
+            # Analytical Feedforward Yaw Angular Velocity
+            ax = self._desired_acc_w[env_ids, 0]
+            ay = self._desired_acc_w[env_ids, 1]
+            v_xy_sq = torch.clamp(vx**2 + vy**2, min=1e-4)
+            self._desired_yaw_rate[env_ids] = (vx * ay - vy * ax) / v_xy_sq
+
+            # Future Lookahead Waypoint (tau_0 + 0.6s)
+            tau_look = tau_0 + 0.6
+            self._lookahead_pos_w[env_ids, 0] = origins[:, 0] + A_x * torch.sin(omega * tau_look)
+            self._lookahead_pos_w[env_ids, 1] = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_look)
+            self._lookahead_pos_w[env_ids, 2] = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_look)
         else:
             # Random phase tau_0 across [0, T_period] ensures all curve lobes, turns & crosses are trained concurrently
             tau_0 = torch.empty(num_resets, device=self.device).uniform_(0.0, T_period)
+            self._traj_time[env_ids] = tau_0
+            origins = self._terrain.env_origins[env_ids]
+            px = origins[:, 0] + A_x * torch.sin(omega * tau_0)
+            py = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_0)
+            pz = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_0)
+            self._desired_pos_w[env_ids, 0] = px
+            self._desired_pos_w[env_ids, 1] = py
+            self._desired_pos_w[env_ids, 2] = pz
 
-        self._traj_time[env_ids] = tau_0
+            vx = A_x * omega * torch.cos(omega * tau_0)
+            vy = A_y * omega * torch.cos(2.0 * omega * tau_0)
+            vz = A_z * omega_z * torch.cos(omega_z * tau_0)
+            self._desired_vel_w[env_ids, 0] = vx
+            self._desired_vel_w[env_ids, 1] = vy
+            self._desired_vel_w[env_ids, 2] = vz
 
-        origins = self._terrain.env_origins[env_ids]
-        px = origins[:, 0] + A_x * torch.sin(omega * tau_0)
-        py = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_0)
-        pz = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_0)
-        self._desired_pos_w[env_ids, 0] = px
-        self._desired_pos_w[env_ids, 1] = py
-        self._desired_pos_w[env_ids, 2] = pz
+            psi_des = torch.atan2(vy, vx)
+            self._psi_des[env_ids] = psi_des
+            sp = torch.sin(psi_des * 0.5)
+            cp = torch.cos(psi_des * 0.5)
+            self._desired_quat_w[env_ids, 0] = cp
+            self._desired_quat_w[env_ids, 1] = 0.0
+            self._desired_quat_w[env_ids, 2] = 0.0
+            self._desired_quat_w[env_ids, 3] = sp
 
-        vx = A_x * omega * torch.cos(omega * tau_0)
-        vy = A_y * omega * torch.cos(2.0 * omega * tau_0)
-        vz = A_z * omega_z * torch.cos(omega_z * tau_0)
-        self._desired_vel_w[env_ids, 0] = vx
-        self._desired_vel_w[env_ids, 1] = vy
-        self._desired_vel_w[env_ids, 2] = vz
+            # Analytical Desired Acceleration for Centripetal Feedforward
+            self._desired_acc_w[env_ids, 0] = -A_x * (omega**2) * torch.sin(omega * tau_0)
+            self._desired_acc_w[env_ids, 1] = -2.0 * A_y * (omega**2) * torch.sin(2.0 * omega * tau_0)
+            self._desired_acc_w[env_ids, 2] = -A_z * (omega_z**2) * torch.sin(omega_z * tau_0)
 
-        psi_des = torch.atan2(vy, vx)
-        self._psi_des[env_ids] = psi_des
-        sp = torch.sin(psi_des * 0.5)
-        cp = torch.cos(psi_des * 0.5)
-        self._desired_quat_w[env_ids, 0] = cp
-        self._desired_quat_w[env_ids, 1] = 0.0
-        self._desired_quat_w[env_ids, 2] = 0.0
-        self._desired_quat_w[env_ids, 3] = sp
+            # Analytical Feedforward Yaw Angular Velocity
+            ax = self._desired_acc_w[env_ids, 0]
+            ay = self._desired_acc_w[env_ids, 1]
+            v_xy_sq = torch.clamp(vx**2 + vy**2, min=1e-4)
+            self._desired_yaw_rate[env_ids] = (vx * ay - vy * ax) / v_xy_sq
 
-        # Analytical Desired Acceleration for Centripetal Feedforward
-        self._desired_acc_w[env_ids, 0] = -A_x * (omega**2) * torch.sin(omega * tau_0)
-        self._desired_acc_w[env_ids, 1] = -2.0 * A_y * (omega**2) * torch.sin(2.0 * omega * tau_0)
-        self._desired_acc_w[env_ids, 2] = -A_z * (omega_z**2) * torch.sin(omega_z * tau_0)
-
-        # Analytical Feedforward Yaw Angular Velocity
-        ax = self._desired_acc_w[env_ids, 0]
-        ay = self._desired_acc_w[env_ids, 1]
-        v_xy_sq = torch.clamp(vx**2 + vy**2, min=1e-4)
-        self._desired_yaw_rate[env_ids] = (vx * ay - vy * ax) / v_xy_sq
-
-        # Future Lookahead Waypoint (tau_0 + 0.6s)
-        tau_look = tau_0 + 0.6
-        self._lookahead_pos_w[env_ids, 0] = origins[:, 0] + A_x * torch.sin(omega * tau_look)
-        self._lookahead_pos_w[env_ids, 1] = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_look)
-        self._lookahead_pos_w[env_ids, 2] = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_look)
+            # Future Lookahead Waypoint (tau_0 + 0.6s)
+            tau_look = tau_0 + 0.6
+            self._lookahead_pos_w[env_ids, 0] = origins[:, 0] + A_x * torch.sin(omega * tau_look)
+            self._lookahead_pos_w[env_ids, 1] = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_look)
+            self._lookahead_pos_w[env_ids, 2] = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_look)
 
         self._pos_err_integral[env_ids] = 0.0
 
