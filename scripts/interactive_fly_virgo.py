@@ -255,30 +255,62 @@ def main():
         prim_path="/Visuals/TargetWaypoint",
         markers={
             "waypoint": sim_utils.SphereCfg(
-                radius=0.15,
+                radius=0.18,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(1.0, 0.1, 0.05),
-                    emissive_color=(1.0, 0.25, 0.05)
+                    diffuse_color=(1.0, 0.08, 0.05),
+                    emissive_color=(1.0, 0.35, 0.1)
                 ),
             )
         }
     )
     target_visualizer = VisualizationMarkers(target_marker_cfg)
 
-    # Visual Wind Arrow Marker
+    # Prominent Visual 3D Wind Direction Arrow (Glowing Teal/Emerald Nodes hovering above drone)
+    NUM_ARROW_NODES = 10
     wind_arrow_cfg = VisualizationMarkersCfg(
         prim_path="/Visuals/WindDirectionArrow",
         markers={
             "arrow_node": sim_utils.SphereCfg(
-                radius=0.065,
+                radius=0.08,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.1, 0.85, 1.0),
-                    emissive_color=(0.1, 0.65, 0.95)
+                    diffuse_color=(0.0, 1.0, 0.7),
+                    emissive_color=(0.1, 0.95, 0.65)
                 ),
             )
         }
     )
     wind_arrow_visualizer = VisualizationMarkers(wind_arrow_cfg)
+
+    # Dynamic 3D Wind Streamlines (Flowing Airfield Particle Mesh past the drone)
+    NUM_STREAMS = 72
+    stream_marker_cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/WindStreamlines",
+        markers={
+            "air_particle": sim_utils.SphereCfg(
+                radius=0.045,
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.15, 0.85, 1.0),
+                    emissive_color=(0.3, 0.9, 1.0)
+                ),
+            )
+        }
+    )
+    stream_visualizer = VisualizationMarkers(stream_marker_cfg)
+
+    # Dynamic Gust Impulse Shockwave Indicator (Pulsing Amber/Crimson Sphere upon 15N impact)
+    gust_marker_cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/GustImpulse",
+        markers={
+            "shockwave": sim_utils.SphereCfg(
+                radius=0.32,
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(1.0, 0.15, 0.0),
+                    emissive_color=(1.0, 0.65, 0.15)
+                ),
+            )
+        }
+    )
+    gust_visualizer = VisualizationMarkers(gust_marker_cfg)
 
     # Interactive Target Coordinates (Starts at Hover: 0.0, 0.0, 2.0 m)
     curr_target_pos = torch.tensor([0.0, 0.0, 2.0], device=device)
@@ -288,6 +320,10 @@ def main():
     last_hud_time = time.time()
     last_telem_send = 0.0
     active_source = "Hover"
+
+    # Initialize 72 stream particle positions around target in 3D volume
+    stream_offsets = (torch.rand(NUM_STREAMS, 3, device=device) - 0.5) * torch.tensor([4.5, 4.5, 2.2], device=device)
+    stream_pts_w = curr_target_pos.clone().unsqueeze(0).repeat(NUM_STREAMS, 1) + stream_offsets
 
     # Initial camera view nicely framing the drone
     try:
@@ -415,18 +451,6 @@ def main():
         env._wind_w[0] = w_dir * w_spd
         env._ext_force_w[0] = torch.tensor([0.0, 1.0, 0.0], device=device) * impulse_f
 
-        # Update 3D Target Marker in viewport
-        target_visualizer.visualize(translations=curr_target_pos.unsqueeze(0))
-
-        # Update 3D Wind Indicator Arrow
-        w_arrow_center = curr_target_pos.clone()
-        w_arrow_center[2] += 1.5
-        w_arrow_len = min(1.8, 0.1 * max(0.5, w_spd))
-        w_arrow_steps = torch.linspace(0.0, w_arrow_len, 5, device=device).unsqueeze(-1)
-        w_eff_dir = w_dir if w_spd > 0.1 else torch.tensor([0.0, 0.0, 0.0], device=device)
-        w_pts = w_arrow_center + w_arrow_steps * w_eff_dir
-        wind_arrow_visualizer.visualize(translations=w_pts)
-
         # RL Policy Forward Pass
         with torch.no_grad():
             actions = agent(obs)
@@ -448,6 +472,74 @@ def main():
         pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, 2.0 * (qw*qy - qz*qx)))))
         yaw_deg = math.degrees(math.atan2(2.0 * (qw*qz + qx*qy), 1.0 - 2.0 * (qy*qy + qz*qz)))
 
+        # ----------------------------------------------------------------------
+        # 1. Update 3D Target Marker in viewport (Bright glowing crimson sphere)
+        # ----------------------------------------------------------------------
+        target_visualizer.visualize(translations=curr_target_pos.unsqueeze(0))
+
+        # ----------------------------------------------------------------------
+        # 2. Dynamic 3D Wind Streamlines (Flowing Airfield Particle Mesh past drone)
+        # ----------------------------------------------------------------------
+        drone_pt = torch.tensor(cur_pos, device=device)
+        if w_spd > 0.3:
+            v_wind = w_dir * w_spd
+            stream_pts_w += v_wind.unsqueeze(0) * sim_dt
+
+            # Rel vector from drone to particles
+            rel_pos = stream_pts_w - drone_pt.unsqueeze(0)
+            proj_along_wind = torch.sum(rel_pos * w_dir.unsqueeze(0), dim=-1)
+
+            # Particles that flowed > 2.8m downstream wrap back to -2.8m upstream
+            downstream_mask = proj_along_wind > 2.8
+            if downstream_mask.any():
+                n_reset = int(downstream_mask.sum().item())
+                lat_r = (torch.rand(n_reset, 2, device=device) - 0.5)
+                if abs(w_dir[2].item()) < 0.9:
+                    u1 = torch.tensor([-w_dir[1].item(), w_dir[0].item(), 0.0], device=device)
+                else:
+                    u1 = torch.tensor([1.0, 0.0, 0.0], device=device)
+                u1 = u1 / torch.clamp(torch.norm(u1), min=1e-4)
+                u2 = torch.cross(w_dir, u1)
+                u2 = u2 / torch.clamp(torch.norm(u2), min=1e-4)
+
+                upstream_base = drone_pt - w_dir * 2.8
+                new_pts = (
+                    upstream_base.unsqueeze(0)
+                    + u1.unsqueeze(0) * (lat_r[:, 0:1] * 3.6)
+                    + u2.unsqueeze(0) * (lat_r[:, 1:2] * 2.0)
+                )
+                stream_pts_w[downstream_mask] = new_pts
+
+            stream_visualizer.visualize(translations=stream_pts_w)
+        else:
+            hidden_streams = torch.full((NUM_STREAMS, 3), -50.0, device=device)
+            stream_visualizer.visualize(translations=hidden_streams)
+
+        # ----------------------------------------------------------------------
+        # 3. Prominent 3D Wind Direction Arrow (Hovering directly above the drone)
+        # ----------------------------------------------------------------------
+        if w_spd > 0.3:
+            arrow_origin = drone_pt.clone()
+            arrow_origin[2] += 1.25
+            arrow_length = min(2.5, 0.14 * w_spd + 0.4)
+            t_steps = torch.linspace(0.0, arrow_length, NUM_ARROW_NODES, device=device).unsqueeze(-1)
+            arrow_pts = arrow_origin.unsqueeze(0) + t_steps * w_dir.unsqueeze(0)
+            wind_arrow_visualizer.visualize(translations=arrow_pts)
+        else:
+            hidden_arrow = torch.full((NUM_ARROW_NODES, 3), -50.0, device=device)
+            wind_arrow_visualizer.visualize(translations=hidden_arrow)
+
+        # ----------------------------------------------------------------------
+        # 4. Dynamic Gust Impulse Shockwave Indicator (Pulsing upon 15N impact in Beaufort 6)
+        # ----------------------------------------------------------------------
+        if impulse_f > 1.0:
+            shock_pos = drone_pt.clone().unsqueeze(0)
+            shock_pos[0, 1] -= 0.35 # Impact from lateral side
+            gust_visualizer.visualize(translations=shock_pos)
+        else:
+            hidden_shock = torch.tensor([[0.0, 0.0, -50.0]], device=device)
+            gust_visualizer.visualize(translations=hidden_shock)
+
         # Smooth Chase Camera Tracking: Follow drone smoothly in 3D from behind
         try:
             cam_x = float(cur_pos[0]) - 4.5 * math.cos(curr_target_yaw)
@@ -459,16 +551,32 @@ def main():
         except Exception:
             pass
 
-        # Send Live Telemetry to Dedicated Terminal Controller (UDP port 9877)
+        # Send Enriched Live Telemetry to Dedicated Terminal Controller (UDP port 9877)
         now_telem = time.time()
         if now_telem - last_telem_send >= 0.08:
             last_telem_send = now_telem
+            cur_speed = float(np.linalg.norm(cur_vel))
+            pos_err_cm = float(np.linalg.norm(cur_pos - curr_target_pos.cpu().numpy()) * 100.0)
+            yaw_err_deg = abs((yaw_deg - math.degrees(curr_target_yaw) + 180.0) % 360.0 - 180.0)
+
             telem_payload = {
                 "pos": [round(float(cur_pos[0]), 2), round(float(cur_pos[1]), 2), round(float(cur_pos[2]), 2)],
                 "target": [round(float(curr_target_pos[0]), 2), round(float(curr_target_pos[1]), 2), round(float(curr_target_pos[2]), 2)],
+                "vel": [round(float(cur_vel[0]), 2), round(float(cur_vel[1]), 2), round(float(cur_vel[2]), 2)],
+                "speed": round(cur_speed, 2),
                 "tilt": [round(roll_deg, 1), round(pitch_deg, 1)],
-                "gimbal": round(float(np.mean(np.abs(servo_b))), 1),
                 "yaw": round(yaw_deg, 1),
+                "target_yaw": round(math.degrees(curr_target_yaw), 1),
+                "yaw_err": round(yaw_err_deg, 1),
+                "pos_err": round(pos_err_cm, 1),
+                "gimbal": round(float(np.mean(np.abs(servo_b))), 1),
+                "gimbal_beta": round(float(np.mean(np.abs(servo_b))), 1),
+                "gimbal_alpha": round(float(np.mean(np.abs(servo_a))), 1),
+                "wind_spd": round(float(w_spd), 1),
+                "wind_dir": [round(float(w_dir[0]), 2), round(float(w_dir[1]), 2), round(float(w_dir[2]), 2)],
+                "wind_mode": int(wind_mode),
+                "wind_name": stage_str,
+                "impulse": round(float(impulse_f), 1),
                 "time": round(t_sim, 1),
             }
             try:

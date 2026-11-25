@@ -1,23 +1,8 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-VIRGO UAV: DEDICATED TERMINAL FLIGHT CONTROLLER (CLI TELEOP)
-Runs in Terminal 3 (or Terminal 2) to command Virgo UAV in Isaac Sim via local UDP.
-================================================================================
-Controls:
-  * W / Up Arrow    : Fly Forward (+X in Heading Direction)
-  * S / Down Arrow  : Fly Backward (-X in Heading Direction)
-  * A / Left Arrow  : Fly Left (Strafe Left, Zero Body Tilt!)
-  * D / Right Arrow : Fly Right (Strafe Right, Zero Body Tilt!)
-  * Space / E       : Climb (+Z Altitude)
-  * C               : Descend (-Z Altitude)
-  * Q               : Yaw Turn Left
-  * R               : Yaw Turn Right
-  * H               : Hover / Hold Position
-  * 0               : Reset Origin (0, 0, 2m)
-  * 1 / 2 / 3 / 4   : Select Wind (1:Calm, 2:Beaufort3, 3:Beaufort5, 4:Beaufort6)
-  * + / -           : Increase / Decrease Step Size
-  * ESC / X         : Quit Controller
+VIRGO UAV 12-DOF MORPHQUAD — PROFESSIONAL FLIGHT CONTROLLER (GCS HUD)
+High-Speed UDP IPC Teleoperation Client for Isaac Sim Simulation
 ================================================================================
 """
 
@@ -72,48 +57,115 @@ def get_key(fd, is_tty=True):
     return ch1
 
 
-def render_dashboard(step_m, last_cmd, drone_state, wind_name, is_connected):
-    """Draws a clean, flicker-free ASCII flight control dashboard."""
-    out = "\033[H\033[J" # Move cursor home and clear screen
-    out += "\033[1;36m"
-    out += "================================================================================\n"
-    out += "              🎮 VIRGO UAV 12-DOF MORPHQUAD TERMINAL CONTROLLER                 \n"
-    out += "================================================================================\n"
-    out += "\033[0m"
-    out += "  [Directional Controls]               [Altitude & Heading]    [Disturbances]\n"
-    out += "    \033[1;32mW / ↑\033[0m : Forward (Heading dir)        \033[1;33mSpace / E\033[0m : Climb (+Z)      \033[1;35m1\033[0m: Calm (0 m/s)\n"
-    out += "    \033[1;32mS / ↓\033[0m : Backward (Heading dir)       \033[1;33mC\033[0m         : Descend (-Z)    \033[1;35m2\033[0m: Beaufort 3 (4.5m/s)\n"
-    out += "    \033[1;32mA / ←\033[0m : Strafe Left (0° Tilt!)       \033[1;33mQ\033[0m         : Yaw Left        \033[1;35m3\033[0m: Beaufort 5 (9.0m/s)\n"
-    out += "    \033[1;32mD / →\033[0m : Strafe Right (0° Tilt!)      \033[1;33mR\033[0m         : Yaw Right       \033[1;35m4\033[0m: Beaufort 6 (14m/s+Push)\n"
-    out += "  ------------------------------------------------------------------------------\n"
-    out += "    \033[1;34mH\033[0m     : Hover / Hold Position         \033[1;34m0\033[0m         : Reset Origin    \033[1;34m+ / -\033[0m: Step Size\n"
-    out += "    \033[1;31mESC/X\033[0m : Quit Controller\n"
-    out += "================================================================================\n"
-    conn_status = "\033[1;32m● CONNECTED (Isaac Sim Active)\033[0m" if is_connected else "\033[1;33m○ WAITING FOR SIMULATION (Run Terminal 1)\033[0m"
-    out += f"  Status: {conn_status}\n"
-    out += f"  \033[1;37mCommand Step:\033[0m \033[1;33m{step_m:.2f} m\033[0m  |  \033[1;37mActive Wind:\033[0m \033[1;35m{wind_name}\033[0m\n"
-    out += f"  \033[1;37mLast Action:\033[0m  \033[1;32m{last_cmd:<40}\033[0m\n"
-    out += "--------------------------------------------------------------------------------\n"
+def make_bar(val, max_val=15.0, width=22):
+    """Draws a smooth graphical unicode progress bar."""
+    ratio = max(0.0, min(1.0, val / max_val))
+    filled = int(round(ratio * width))
+    empty = width - filled
+    return "█" * filled + "░" * empty
 
+
+def render_dashboard(step_m, step_yaw, last_cmd, drone_state, wind_name, wind_mode, is_connected, fps):
+    """Draws a clean, publication-grade, flicker-free ASCII flight control HUD."""
+    out = "\033[H\033[J" # Move cursor home and clear screen
+
+    # Header Box
+    out += "\033[1;36m"
+    out += "╔══════════════════════════════════════════════════════════════════════════════════════╗\n"
+    out += "║             🚀 VIRGO UAV 12-DOF MORPHQUAD GROUND CONTROL TERMINAL                    ║\n"
+    out += "║         Decoupled Omni-Directional Vectoring & Disturbance Rejection                 ║\n"
+    out += "╠══════════════════════════════════════════════════════════════════════════════════════╣\n"
+    out += "\033[0m"
+
+    # Status Bar
+    if is_connected:
+        conn_str = f"\033[1;32m● ONLINE ({fps:4.1f} Hz)\033[0m"
+        t_sim = drone_state.get("time", 0.0) if drone_state else 0.0
+        out += f"║  STATUS: {conn_str}  │  SIM TIME: \033[1;37m{t_sim:5.1f} s\033[0m  │  PORT: \033[1;33m127.0.0.1:9876/9877\033[0m         ║\n"
+    else:
+        conn_str = "\033[1;33m○ WAITING FOR SIMULATION (Run Terminal 1: ./run_isaac_sim.sh)\033[0m"
+        out += f"║  STATUS: {conn_str:<82}║\n"
+
+    out += "\033[1;36m╠══════════════════════════════════════════════════════════════════════════════════════╣\033[0m\n"
+
+    # Navigation & Coordinates Section
+    out += "║  \033[1;37m[NAVIGATION & POSITION TRACKING]\033[0m                                                    ║\n"
     if drone_state and is_connected:
         pos = drone_state.get("pos", [0, 0, 0])
         tgt = drone_state.get("target", [0, 0, 0])
-        tilt = drone_state.get("tilt", [0, 0])
-        servo = drone_state.get("gimbal", 0.0)
+        vel = drone_state.get("vel", [0, 0, 0])
+        spd = drone_state.get("speed", 0.0)
         yaw = drone_state.get("yaw", 0.0)
-        t_sim = drone_state.get("time", 0.0)
+        tgt_yaw = drone_state.get("target_yaw", 0.0)
+        yaw_err = drone_state.get("yaw_err", 0.0)
+        pos_err = drone_state.get("pos_err", 0.0)
 
-        out += f"  \033[1;36m[FLIGHT TELEMETRY]\033[0m Sim Time: \033[1;37m{t_sim:5.1f}s\033[0m | Heading Yaw: \033[1;37m{yaw:+5.1f}°\033[0m\n"
-        out += f"    Target Position : (\033[1;33m{tgt[0]:+5.2f}\033[0m, \033[1;33m{tgt[1]:+5.2f}\033[0m, \033[1;33m{tgt[2]:4.2f}\033[0mm)\n"
-        out += f"    Drone Position  : (\033[1;32m{pos[0]:+5.2f}\033[0m, \033[1;32m{pos[1]:+5.2f}\033[0m, \033[1;32m{pos[2]:4.2f}\033[0mm)\n"
-        out += f"    Body Tilt       : Roll \033[1;32m{tilt[0]:+4.1f}°\033[0m, Pitch \033[1;32m{tilt[1]:+4.1f}°\033[0m (Near 0.0° Dead-Level!)\n"
-        out += f"    Gimbal Servos β : \033[1;33m{servo:4.1f}°\033[0m (Dynamixel Servos Actively Vectoring Thrust!)\n"
+        err_badge = "\033[1;32m[OPTIMAL]\033[0m" if pos_err < 15.0 else ("\033[1;33m[TRACKING]\033[0m" if pos_err < 40.0 else "\033[1;31m[ADJUSTING]\033[0m")
+
+        out += f"║    Target Coords :  X = \033[1;33m{tgt[0]:+5.2f} m\033[0m  │  Y = \033[1;33m{tgt[1]:+5.2f} m\033[0m  │  Z = \033[1;33m{tgt[2]:4.2f} m\033[0m  │  Ψ = \033[1;33m{tgt_yaw:+5.1f}°\033[0m  ║\n"
+        out += f"║    Drone Coords  :  X = \033[1;32m{pos[0]:+5.2f} m\033[0m  │  Y = \033[1;32m{pos[1]:+5.2f} m\033[0m  │  Z = \033[1;32m{pos[2]:4.2f} m\033[0m  │  Ψ = \033[1;32m{yaw:+5.1f}°\033[0m  ║\n"
+        out += f"║    Precision     :  Error: \033[1;37m{pos_err:4.1f} cm\033[0m {err_badge}  │  Airspeed: \033[1;37m{spd:4.2f} m/s\033[0m  │  Yaw Err: \033[1;37{yaw_err:4.1f}°\033[0m  ║\n"
     else:
-        out += "  \033[1;33m[TELEMETRY OFFLINE]\033[0m Launching Isaac Sim in Terminal 1 will stream live data here.\n"
-        out += "                      Commands sent via UDP to 127.0.0.1:9876.\n"
+        out += "║    Waiting for active telemetry feed from Isaac Sim...                               ║\n"
+        out += "║    (Drone starts at Hover: X=0.00m, Y=0.00m, Z=2.00m)                                ║\n"
+        out += "║                                                                                      ║\n"
 
-    out += "================================================================================\n"
-    out += "  \033[2mTip: Keep this terminal window focused to send keyboard commands!\033[0m\n"
+    out += "\033[1;36m╠══════════════════════════════════════════════════════════════════════════════════════╣\033[0m\n"
+
+    # Decoupled Attitude & Actuator Status
+    out += "║  \033[1;37m[DECOUPLED ATTITUDE & DYNAMIXEL VECTORING]\033[0m                                          ║\n"
+    if drone_state and is_connected:
+        tilt = drone_state.get("tilt", [0, 0])
+        beta = drone_state.get("gimbal_beta", drone_state.get("gimbal", 0.0))
+        alpha = drone_state.get("gimbal_alpha", 0.0)
+
+        out += f"║    Body Attitude :  Roll = \033[1;32m{tilt[0]:+4.1f}°\033[0m  │  Pitch = \033[1;32m{tilt[1]:+4.1f}°\033[0m  \033[1;32m(0.0° Dead-Level Body!)\033[0m        ║\n"
+        out += f"║    Dynamixel β   :  \033[1;33m{beta:4.1f}° / 90.0°\033[0m   [Active Lateral Force & Wind Resistance]        ║\n"
+        out += f"║    Dynamixel α   :  \033[1;33m{alpha:4.1f}° / 180.0°\033[0m  [Continuous Azimuth Vectoring & Heading Yaw]    ║\n"
+    else:
+        out += "║    Body Attitude :  Roll = 0.0°  │  Pitch = 0.0° (Dead-Level Translation)            ║\n"
+        out += "║    Actuators     :  8 Motors + 8 Dynamixel Servos ready                              ║\n"
+        out += "║                                                                                      ║\n"
+
+    out += "\033[1;36m╠══════════════════════════════════════════════════════════════════════════════════════╣\033[0m\n"
+
+    # Environmental Disturbance & Wind Gauge
+    out += "║  \033[1;37m[BEAUFORT WIND REGIME & DISTURBANCES]\033[0m                                               ║\n"
+    w_spd = drone_state.get("wind_spd", 0.0) if (drone_state and is_connected) else (0.0 if wind_mode == 1 else (4.5 if wind_mode == 2 else (9.0 if wind_mode == 3 else 14.0)))
+    w_dir = drone_state.get("wind_dir", [0, 0, 0]) if (drone_state and is_connected) else [0, 0, 0]
+    impulse_f = drone_state.get("impulse", 0.0) if (drone_state and is_connected) else 0.0
+
+    bar_str = make_bar(w_spd, max_val=15.0, width=22)
+    if impulse_f > 1.0:
+        impulse_str = "\033[1;31;5m💥 15.0N GUST SHOCKWAVE ACTIVE!\033[0m"
+    else:
+        impulse_str = "\033[1;32mLaminar Streamline Flow\033[0m"
+
+    out += f"║    Active Preset :  \033[1;35m[{wind_mode}] {wind_name:<50}\033[0m║\n"
+    out += f"║    Wind Velocity :  [\033[1;36m{bar_str}\033[0m] \033[1;37m{w_spd:4.1f} m/s\033[0m (Vx:{w_dir[0]:+.1f}, Vy:{w_dir[1]:+.1f})           ║\n"
+    out += f"║    Impulse Push  :  {impulse_str:<70}║\n"
+
+    out += "\033[1;36m╠══════════════════════════════════════════════════════════════════════════════════════╣\033[0m\n"
+
+    # Flight Command Matrix
+    out += "║  \033[1;37m[FLIGHT CONTROLS & SHORTCUTS]\033[0m                                                       ║\n"
+    out += "║    \033[1;32m[W / ↑]\033[0m Fly Forward (+X heading)      \033[1;33m[Space / E]\033[0m Climb Up (+Z)                     ║\n"
+    out += "║    \033[1;32m[S / ↓]\033[0m Fly Backward (-X heading)     \033[1;33m[C]        \033[0m Descend Down (-Z)                 ║\n"
+    out += "║    \033[1;32m[A / ←]\033[0m Strafe Left (0.0° Body Tilt!) \033[1;33m[Q]        \033[0m Yaw Rotate Left                   ║\n"
+    out += "║    \033[1;32m[D / →]\033[0m Strafe Right (0.0° Body Tilt!)\033[1;33m[R]        \033[0m Yaw Rotate Right                  ║\n"
+    out += "║    ──────────────────────────────────────────────────────────────────────────────    ║\n"
+    out += "║    \033[1;35m[1]\033[0m Calm (0 m/s)              \033[1;35m[2]\033[0m Beaufort 3 (4.5 m/s)                            ║\n"
+    out += "║    \033[1;35m[3]\033[0m Beaufort 5 (9.0 m/s)      \033[1;35m[4]\033[0m Beaufort 6 (14 m/s + 15N Gust Push!)            ║\n"
+    out += f"║    \033[1;34m[H]\033[0m Hold Hover  \033[1;34m[0]\033[0m Reset Origin  \033[1;34m[+/-]\033[0m Step: \033[1;33m{step_m:.2f}m\033[0m   \033[1;34m[[/]]\033[0m Yaw: \033[1;33m{math.degrees(step_yaw):.1f}°\033[0m        ║\n"
+    out += "║    \033[1;31m[ESC / X]\033[0m Exit Flight Controller                                                  ║\n"
+
+    out += "\033[1;36m╠══════════════════════════════════════════════════════════════════════════════════════╣\033[0m\n"
+
+    # Action Status
+    out += f"║  LAST ACTION: \033[1;32m{last_cmd:<70}\033[0m║\n"
+    out += "\033[1;36m╚══════════════════════════════════════════════════════════════════════════════════════╝\033[0m\n"
+    out += "  \033[2mTip: Keep this terminal focused while commanding flight in Isaac Sim!\033[0m\n"
+
     sys.stdout.write(out)
     sys.stdout.flush()
 
@@ -122,25 +174,29 @@ def main():
     sock_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_recv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
+        sock_recv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock_recv.bind((UDP_HOST, UDP_RECV_PORT))
         sock_recv.setblocking(False)
     except Exception as e:
-        print(f"Warning: Could not bind UDP telemetry receiver ({e})")
+        print(f"Notice: Could not bind UDP telemetry receiver ({e})")
 
-    step_m = 0.8  # 0.8 meter horizontal step per keypress
-    step_z = 0.4  # 0.4 meter altitude step per keypress
-    step_yaw = 0.35 # ~20 degrees per keypress
+    step_m = 0.8       # 0.8 meter horizontal step per keypress
+    step_z = 0.4       # 0.4 meter altitude step per keypress
+    step_yaw = 0.2618  # 15.0 degrees per keypress
 
     wind_names = {
         1: "Calm (0 m/s)",
-        2: "Beaufort 3 (4.5 m/s)",
-        3: "Beaufort 5 (9.0 m/s)",
-        4: "Beaufort 6 (14 m/s + 15N Push!)"
+        2: "Beaufort 3 - Gentle Breeze (4.5 m/s)",
+        3: "Beaufort 5 - Fresh Breeze (9.0 m/s)",
+        4: "Beaufort 6 - Gale (14 m/s + 15N Gust Push!)"
     }
     wind_mode = 1
     last_cmd = "System Ready - Press W/A/S/D to Fly"
     drone_state = None
     last_rx_time = 0.0
+    packet_count = 0
+    fps = 0.0
+    last_fps_calc = time.time()
 
     is_tty = sys.stdin.isatty()
     old_settings = None
@@ -154,23 +210,32 @@ def main():
             is_tty = False
 
     # Initial dashboard render
-    render_dashboard(step_m, last_cmd, drone_state, wind_names[wind_mode], False)
+    render_dashboard(step_m, step_yaw, last_cmd, drone_state, wind_names[wind_mode], wind_mode, False, 0.0)
     last_render_time = time.time()
 
     try:
         while True:
-            # Check telemetry from Isaac Sim (port 9877)
+            # Drain telemetry queue to obtain the freshest packet
             while True:
                 try:
-                    data, _ = sock_recv.recvfrom(2048)
+                    data, _ = sock_recv.recvfrom(4096)
                     drone_state = json.loads(data.decode())
                     last_rx_time = time.time()
+                    packet_count += 1
+                    if "wind_mode" in drone_state:
+                        wind_mode = int(drone_state["wind_mode"])
                 except (BlockingIOError, socket.error):
                     break
                 except Exception:
                     break
 
-            is_connected = (time.time() - last_rx_time) < 1.5
+            now = time.time()
+            if now - last_fps_calc >= 1.0:
+                fps = packet_count / (now - last_fps_calc)
+                packet_count = 0
+                last_fps_calc = now
+
+            is_connected = (now - last_rx_time) < 1.5
 
             # Read user keypress non-blockingly
             key = get_key(fd, is_tty)
@@ -180,58 +245,64 @@ def main():
                 break
             elif key in ('w', 'W', 'UP'):
                 packet = {"nudge_forward": step_m}
-                last_cmd = f"FLY FORWARD (+{step_m:.2f}m Ahead)"
+                last_cmd = f"FLY FORWARD (+{step_m:.2f}m in heading direction)"
             elif key in ('s', 'S', 'DOWN'):
                 packet = {"nudge_forward": -step_m}
-                last_cmd = f"FLY BACKWARD (-{step_m:.2f}m Back)"
+                last_cmd = f"FLY BACKWARD (-{step_m:.2f}m in heading direction)"
             elif key in ('a', 'A', 'LEFT'):
                 packet = {"nudge_strafe": step_m}
-                last_cmd = f"STRAFE LEFT (+{step_m:.2f}m Left - Zero Tilt!)"
+                last_cmd = f"STRAFE LEFT (+{step_m:.2f}m - 0.0° Dead-Level Tilt!)"
             elif key in ('d', 'D', 'RIGHT'):
                 packet = {"nudge_strafe": -step_m}
-                last_cmd = f"STRAFE RIGHT (-{step_m:.2f}m Right - Zero Tilt!)"
+                last_cmd = f"STRAFE RIGHT (-{step_m:.2f}m - 0.0° Dead-Level Tilt!)"
             elif key in (' ', 'e', 'E'):
                 packet = {"nudge_z": step_z}
-                last_cmd = f"CLIMB (+{step_z:.2f}m Up)"
+                last_cmd = f"CLIMB UP (+{step_z:.2f}m Altitude)"
             elif key in ('c', 'C'):
                 packet = {"nudge_z": -step_z}
-                last_cmd = f"DESCEND (-{step_z:.2f}m Down)"
+                last_cmd = f"DESCEND DOWN (-{step_z:.2f}m Altitude)"
             elif key in ('q', 'Q'):
                 packet = {"nudge_yaw": step_yaw}
-                last_cmd = f"YAW LEFT (+{int(math.degrees(step_yaw))}°)"
+                last_cmd = f"YAW TURN LEFT (+{int(round(math.degrees(step_yaw)))}° Heading)"
             elif key in ('r', 'R'):
                 packet = {"nudge_yaw": -step_yaw}
-                last_cmd = f"YAW RIGHT (-{int(math.degrees(step_yaw))}°)"
+                last_cmd = f"YAW TURN RIGHT (-{int(round(math.degrees(step_yaw)))}° Heading)"
             elif key in ('h', 'H'):
                 packet = {"hold": True}
-                last_cmd = "HOLD POSITION / HOVER"
+                last_cmd = "HOVER HOLD (Maintaining Current Position)"
             elif key == '0':
                 packet = {"reset": True}
-                last_cmd = "RESET TO ORIGIN (0, 0, 2m)"
+                last_cmd = "RESET TO ORIGIN (Hover at 0, 0, 2m)"
             elif key in ('1', '2', '3', '4'):
                 wind_mode = int(key)
                 packet = {"wind_mode": wind_mode}
-                last_cmd = f"SET WIND: {wind_names[wind_mode]}"
+                last_cmd = f"SET WIND DISTURBANCE: {wind_names[wind_mode]}"
             elif key in ('+', '='):
                 step_m = round(min(3.0, step_m + 0.2), 2)
                 step_z = round(min(2.0, step_z + 0.1), 2)
-                last_cmd = f"INCREASED STEP: {step_m:.2f}m"
+                last_cmd = f"INCREASED STEP SIZE: {step_m:.2f}m"
             elif key in ('-', '_'):
                 step_m = round(max(0.2, step_m - 0.2), 2)
                 step_z = round(max(0.1, step_z - 0.1), 2)
-                last_cmd = f"DECREASED STEP: {step_m:.2f}m"
+                last_cmd = f"DECREASED STEP SIZE: {step_m:.2f}m"
+            elif key in (']', '}'):
+                step_yaw = round(min(math.radians(45.0), step_yaw + math.radians(5.0)), 4)
+                last_cmd = f"INCREASED YAW STEP: {int(round(math.degrees(step_yaw)))}°"
+            elif key in ('[', '{'):
+                step_yaw = round(max(math.radians(5.0), step_yaw - math.radians(5.0)), 4)
+                last_cmd = f"DECREASED YAW STEP: {int(round(math.degrees(step_yaw)))}°"
 
             # Transmit UDP packet to Isaac Sim
             if packet is not None:
                 msg_bytes = json.dumps(packet).encode()
                 sock_send.sendto(msg_bytes, (UDP_HOST, UDP_SEND_PORT))
-                render_dashboard(step_m, last_cmd, drone_state, wind_names[wind_mode], is_connected)
+                render_dashboard(step_m, step_yaw, last_cmd, drone_state, wind_names[wind_mode], wind_mode, is_connected, fps)
                 last_render_time = time.time()
 
-            # Refresh dashboard at 10 Hz
+            # Refresh dashboard at 12 Hz for fluid HUD numbers
             now = time.time()
-            if now - last_render_time >= 0.10:
-                render_dashboard(step_m, last_cmd, drone_state, wind_names[wind_mode], is_connected)
+            if now - last_render_time >= 0.08:
+                render_dashboard(step_m, step_yaw, last_cmd, drone_state, wind_names[wind_mode], wind_mode, is_connected, fps)
                 last_render_time = now
 
             time.sleep(0.01)
@@ -246,7 +317,7 @@ def main():
                 pass
         sock_send.close()
         sock_recv.close()
-        print("\n\n[Terminal Controller] Exited cleanly.\n")
+        print("\n\n[Flight Controller] Exited cleanly. Terminal restored.\n")
 
 
 if __name__ == "__main__":
