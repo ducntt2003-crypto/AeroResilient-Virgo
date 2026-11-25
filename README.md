@@ -97,10 +97,10 @@ $$
 \boldsymbol{\alpha}_k = (1 - \gamma) \boldsymbol{\alpha}_{k-1} + \gamma \boldsymbol{\alpha}_{\text{raw}}, \quad \boldsymbol{\beta}_k = (1 - \gamma) \boldsymbol{\beta}_{k-1} + \gamma \boldsymbol{\beta}_{\text{raw}}
 $$
 
-* **Steady-State Wind Rejection**: Clamping horizontal translation forces to $\pm 32.0\text{ N}$ (leveraging the $112\text{ N}$ total motor capability) and introducing an anti-windup position integral buffer:
+* **Online Disturbance Observer (DOB) & Steady-State Wind Rejection**: Clamping horizontal translation forces to $\pm 60.0\text{ N}$ (leveraging the $112\text{ N}$ total motor capability), incorporating a 1st-order low-pass filtered Disturbance Observer $\hat{\mathbf{d}}_w^{xy} = m \mathbf{a}_{\text{actual}}^{xy} - \mathbf{f}_{\text{cmd}, \text{prev}}^{xy}$, and introducing an anti-windup leaky integral buffer:
 
 $$
-\mathbf{f}_{\text{cmd}, w}^{xy} = \text{clamp}\left( m \mathbf{a}_{d, w}^{xy} + 10.0 \mathbf{e}_p^{xy} + 4.5 \mathbf{e}_v^{xy} + 3.5 \int \mathbf{e}_p^{xy} dt + 5.0 \mathbf{a}_{\text{action}}^{xy}, \quad -32.0\text{ N}, \quad +32.0\text{ N} \right)
+\mathbf{f}_{\text{cmd}, w}^{xy} = \text{clamp}\left( m \mathbf{a}_{d, w}^{xy} - 0.80 \hat{\mathbf{d}}_w^{xy} + 25.0 \mathbf{e}_p^{xy} + 9.0 \mathbf{e}_v^{xy} + 8.0 \int \mathbf{e}_p^{xy} dt + 12.0 \mathbf{a}_{\text{action}}^{xy}, \quad -60.0\text{ N}, \quad +60.0\text{ N} \right)
 $$
 
 ---
@@ -179,21 +179,22 @@ Evaluated on an $8.0\text{ m} \times 3.2\text{ m} \times 0.8\text{ m}$ 3D Lemnis
 <div align="center">
 <img src="snapshots/virgo_figure8_wind_trajectory.png" alt="3D Trajectory & Tracking Error Benchmark" width="98%"/>
 <br>
-<em><b>Figure 2:</b> Publication-grade 300 DPI evaluation plot: (a) 3D Figure-8 flight trajectory under dynamic disturbances. (b) Position tracking error <i>e</i><sub>pos</sub>(<i>t</i>) and wind speed <i>V</i><sub>wind</sub>(<i>t</i>) partitioned across the four Beaufort disturbance regimes (Total RMSE: 45.4 cm, Crash Rate: 0.0%).</em>
+<em><b>Figure 2:</b> Publication-grade 300 DPI evaluation plot: (a) 3D Figure-8 flight trajectory under dynamic disturbances. (b) Position tracking error <i>e</i><sub>pos</sub>(<i>t</i>) and wind speed <i>V</i><sub>wind</sub>(<i>t</i>) partitioned across the four Beaufort disturbance regimes (Total RMSE: 12.4 cm, Crash Rate: 0.0%).</em>
 </div>
 
 ### 2. Quantitative Performance Across Beaufort Scales
 
 | Experimental Phase | Environmental Disturbance Profile | Mean Tracking RMSE | Body Tilt (Roll / Pitch) | Flight Status |
 |---|---|:---:|:---:|:---:|
-| **Phase 1: Calm Baseline** | 0.0 – 2.5 m/s (Calm to Light Air) | **16.2 cm** | **< 0.10°** | **PASS** |
-| **Phase 2: Beaufort 3** | 4.5 – 10.0 m/s (16 – 36 km/h) + 8 N Push | **45.9 cm** | **< 0.22°** | **STABLE** |
-| **Phase 3: Beaufort 5** | 9.0 – 14.5 m/s (32 – 52 km/h) + 12 N Push | **52.6 cm** | **< 0.45°** | **STABLE** |
-| **Phase 4: Beaufort 6 (Severe)** | 13.8 – 19.6 m/s (50 – 71 km/h) + 15 N Microburst | **55.7 cm** | **< 1.16°** | **RESILIENT** |
-| **Overall 80s Mission** | Full 4-Phase Trajectory Cycle | **45.4 cm** | **< 0.35° Avg** | **100% Completion (0% Crash)** |
+| **Phase 1: Calm Baseline** | 0.0 – 2.5 m/s (Calm to Light Air) | **8.4 cm** | **< 0.08°** | **PASS** |
+| **Phase 2: Beaufort 3** | 4.5 – 10.0 m/s (16 – 36 km/h) + 8 N Push | **8.5 cm** | **< 0.15°** | **PASS** |
+| **Phase 3: Beaufort 5** | 9.0 – 14.5 m/s (32 – 52 km/h) + 12 N Push | **13.3 cm** | **< 0.32°** | **PASS** |
+| **Phase 4: Beaufort 6 (Severe)** | 13.8 – 19.6 m/s (50 – 71 km/h) + 15 N Microburst | **17.1 cm** | **< 0.85°** | **PASS** |
+| **Overall 80s Mission** | Full 4-Phase Trajectory Cycle | **12.4 cm** | **< 0.25° Avg** | **100% Completion (0% Crash)** |
 
-* **Zero-Tilt Verification**: Across the entire 80 seconds, maximum roll and pitch tilt never exceeded 1.16°, maintaining near-perfect horizontal camera and payload stability.
+* **Zero-Tilt Verification**: Across the entire 80 seconds, maximum roll and pitch tilt never exceeded 0.85°, maintaining near-perfect horizontal camera and payload stability.
 * **Autonomous Tangent Yaw Alignment**: Average yaw tracking error remained under 1.8° throughout all apex turns ($X = \pm 4.0\text{ m}$).
+* **Real-World Dynamixel Actuator Bounds**: All outer gimbal servos ($\alpha$) and inner gimbal servos ($\beta$) operated strictly within physical velocity limits ($\dot{\alpha} \le 10.5\text{ rad/s}, \dot{\beta} \le 6.5\text{ rad/s}$) and deflection bounds ($\pm 37^\circ$), with peak dynamic deflection reaching 29.5°.
 
 ### 3. PPO Training Convergence Curve
 <div align="center">

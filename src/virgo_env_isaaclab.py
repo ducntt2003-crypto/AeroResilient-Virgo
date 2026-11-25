@@ -252,6 +252,8 @@ class VirgoEnv(DirectRLEnv):
         self._ext_force_w = torch.zeros(self.num_envs, 3, device=self.device) # External disturbance force in N
         self._ext_torque_b = torch.zeros(self.num_envs, 3, device=self.device)# External disturbance torque in Nm
         self._pos_err_integral = torch.zeros(self.num_envs, 3, device=self.device) # Integral buffer for wind/disturbance compensation
+        self._estimated_dist_w = torch.zeros(self.num_envs, 3, device=self.device) # Online Disturbance Observer (DOB) buffer
+        self._prev_f_cmd_w = torch.zeros(self.num_envs, 3, device=self.device)     # Commanded force memory for DOB
 
         # Multi-body distributed force/torque buffers: [num_envs, 5 bodies, 3] (0: BODY disturbance, 1..4: SHAFT_MOTOR_1..4 thrust)
         self._actions = torch.zeros(self.num_envs, 6, device=self.device)
@@ -376,29 +378,41 @@ class VirgoEnv(DirectRLEnv):
         q_w = self._robot.data.root_quat_w # [B, 4]
         pos_w = self._robot.data.root_pos_w # [B, 3]
 
-        # 1. Unified World-Frame Force Synthesis
+        # Online Disturbance Observer (DOB) for instantaneous wind drag & microburst push rejection
+        # d_raw = m * a_actual - f_control_prev (body force mapped to world frame)
+        f_delivered_prev_xy = self._prev_f_cmd_w[:, 0:2]
+        a_actual_xy = self._current_acc_w[:, 0:2]
+        d_measured_xy = self.cfg.nominal_mass * a_actual_xy - f_delivered_prev_xy
+
+        # 1st-order low-pass filter (cutoff ~ 8 Hz) to reject differentiation noise
+        gamma_dob = 0.25
+        self._estimated_dist_w[:, 0:2] = (1.0 - gamma_dob) * self._estimated_dist_w[:, 0:2] + gamma_dob * d_measured_xy
+
+        # 1. Unified World-Frame Force Synthesis with DOB feedforward compensation
         pos_err_w = self._desired_pos_w - pos_w
         vel_err_w = self._desired_vel_w - cur_vel_w
 
-        self._pos_err_integral += pos_err_w * self.step_dt
-        self._pos_err_integral = torch.clamp(self._pos_err_integral, -2.5, 2.5)
+        self._pos_err_integral = self._pos_err_integral * (1.0 - 0.005 * self.step_dt) + pos_err_w * self.step_dt
+        self._pos_err_integral = torch.clamp(self._pos_err_integral, -8.0, 8.0)
 
         f_cmd_w = torch.zeros(self.num_envs, 3, device=self.device)
         f_cmd_w[:, 0:2] = torch.clamp(
             self.cfg.nominal_mass * self._desired_acc_w[:, 0:2]
-            + 10.0 * pos_err_w[:, 0:2]
-            + 4.5 * vel_err_w[:, 0:2]
-            + 3.5 * self._pos_err_integral[:, 0:2]
-            + self._actions[:, 0:2] * 5.0,
-            -32.0, 32.0
+            - 0.80 * self._estimated_dist_w[:, 0:2]
+            + 25.0 * pos_err_w[:, 0:2]
+            + 9.0 * vel_err_w[:, 0:2]
+            + 8.0 * self._pos_err_integral[:, 0:2]
+            + self._actions[:, 0:2] * 12.0,
+            -60.0, 60.0
         )
+        self._prev_f_cmd_w[:, 0:2] = f_cmd_w[:, 0:2].clone()
         z_err = self._desired_pos_w[:, 2] - pos_w[:, 2]
         vz_err = self._desired_vel_w[:, 2] - cur_vel_w[:, 2]
         f_cmd_w[:, 2] = (
             self._robot_weight
-            + 18.0 * z_err
-            + 6.0 * vz_err
-            + self._actions[:, 2] * (self._robot_weight * 0.25)
+            + 25.0 * z_err
+            + 9.0 * vz_err
+            + self._actions[:, 2] * (self._robot_weight * 0.4)
         )
 
         # Rotate total commanded force cleanly into Body Frame
@@ -802,3 +816,6 @@ class VirgoEnv(DirectRLEnv):
         self._d_servo_pos[env_ids] = 0.0
         self._d_servo_vel[env_ids] = 0.0
         self._prev_lin_vel_w[env_ids] = 0.0
+        self._pos_err_integral[env_ids] = 0.0
+        self._estimated_dist_w[env_ids] = 0.0
+        self._prev_f_cmd_w[env_ids] = 0.0
