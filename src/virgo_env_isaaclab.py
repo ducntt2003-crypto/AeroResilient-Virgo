@@ -100,8 +100,9 @@ class VirgoEnvCfg(DirectRLEnvCfg):
     inner_servo_torque_limit = 0.8 # N*m
 
     # Flight Mode
-    upright_only: bool = True # True: Always fly upright (Roll=0, Pitch=0), vectoring thrust via servos only
-    is_eval: bool = False     # True: Standalone evaluation mode (no divergence reset, continuous loop)
+    upright_only: bool = True     # True: Always fly upright (Roll=0, Pitch=0), vectoring thrust via servos only
+    is_eval: bool = False         # True: Standalone evaluation mode (no divergence reset, continuous loop)
+    interactive_mode: bool = False # True: Manual user teleoperation (does not overwrite targets with Figure-8)
 
     # Reward weights
     r_pos_scale = 5.0
@@ -321,54 +322,57 @@ class VirgoEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0)
 
-        # Update Large-Scale 3D Figure-8 (Lemniscate) Target smoothly based on trajectory time
-        self._traj_time += self.step_dt
-        tau = self._traj_time
-        T_period = 20.0 # 20 seconds period provides ample runway & gentle, natural cornering
-        omega = 2.0 * math.pi / T_period
-        omega_z = 2.0 * omega
+        if not self.cfg.interactive_mode:
+            # Update Large-Scale 3D Figure-8 (Lemniscate) Target smoothly based on trajectory time
+            self._traj_time += self.step_dt
+            tau = self._traj_time
+            T_period = 20.0 # 20 seconds period provides ample runway & gentle, natural cornering
+            omega = 2.0 * math.pi / T_period
+            omega_z = 2.0 * omega
 
-        origins = self._terrain.env_origins # [num_envs, 3]
-        A_x = 4.0  # Width span = 8.0 m
-        A_y = 1.6  # Length span = 3.2 m
-        A_z = 0.4  # Altitude amplitude
-        z_0 = 2.0  # Base hover altitude = 2.0 m
+            origins = self._terrain.env_origins # [num_envs, 3]
+            A_x = 4.0  # Width span = 8.0 m
+            A_y = 1.6  # Length span = 3.2 m
+            A_z = 0.4  # Altitude amplitude
+            z_0 = 2.0  # Base hover altitude = 2.0 m
 
-        self._desired_pos_w[:, 0] = origins[:, 0] + A_x * torch.sin(omega * tau)
-        self._desired_pos_w[:, 1] = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau)
-        self._desired_pos_w[:, 2] = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau)
+            self._desired_pos_w[:, 0] = origins[:, 0] + A_x * torch.sin(omega * tau)
+            self._desired_pos_w[:, 1] = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau)
+            self._desired_pos_w[:, 2] = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau)
 
-        self._desired_vel_w[:, 0] = A_x * omega * torch.cos(omega * tau)
-        self._desired_vel_w[:, 1] = A_y * omega * torch.cos(2.0 * omega * tau)
-        self._desired_vel_w[:, 2] = A_z * omega_z * torch.cos(omega_z * tau)
+            self._desired_vel_w[:, 0] = A_x * omega * torch.cos(omega * tau)
+            self._desired_vel_w[:, 1] = A_y * omega * torch.cos(2.0 * omega * tau)
+            self._desired_vel_w[:, 2] = A_z * omega_z * torch.cos(omega_z * tau)
 
-        # Desired Heading: Align nose with flight trajectory velocity tangent
-        self._psi_des = torch.atan2(self._desired_vel_w[:, 1], self._desired_vel_w[:, 0]) # [num_envs]
-        sp = torch.sin(self._psi_des * 0.5)
-        cp = torch.cos(self._psi_des * 0.5)
-        self._desired_quat_w[:, 0] = cp
-        self._desired_quat_w[:, 1] = 0.0
-        self._desired_quat_w[:, 2] = 0.0
-        self._desired_quat_w[:, 3] = sp
+            # Desired Heading: Align nose with flight trajectory velocity tangent
+            self._psi_des = torch.atan2(self._desired_vel_w[:, 1], self._desired_vel_w[:, 0]) # [num_envs]
+            sp = torch.sin(self._psi_des * 0.5)
+            cp = torch.cos(self._psi_des * 0.5)
+            self._desired_quat_w[:, 0] = cp
+            self._desired_quat_w[:, 1] = 0.0
+            self._desired_quat_w[:, 2] = 0.0
+            self._desired_quat_w[:, 3] = sp
 
-        # Analytical Desired Acceleration for Centripetal Cornering Feedforward
-        self._desired_acc_w[:, 0] = -A_x * (omega**2) * torch.sin(omega * tau)
-        self._desired_acc_w[:, 1] = -2.0 * A_y * (omega**2) * torch.sin(2.0 * omega * tau)
-        self._desired_acc_w[:, 2] = -A_z * (omega_z**2) * torch.sin(omega_z * tau)
+            # Analytical Desired Acceleration for Centripetal Cornering Feedforward
+            self._desired_acc_w[:, 0] = -A_x * (omega**2) * torch.sin(omega * tau)
+            self._desired_acc_w[:, 1] = -2.0 * A_y * (omega**2) * torch.sin(2.0 * omega * tau)
+            self._desired_acc_w[:, 2] = -A_z * (omega_z**2) * torch.sin(omega_z * tau)
 
-        # Analytical Feedforward Yaw Angular Velocity for Figure-8 Cornering
-        vx = self._desired_vel_w[:, 0]
-        vy = self._desired_vel_w[:, 1]
-        ax = self._desired_acc_w[:, 0]
-        ay = self._desired_acc_w[:, 1]
-        v_xy_sq = torch.clamp(vx**2 + vy**2, min=1e-4)
-        self._desired_yaw_rate = torch.clamp((vx * ay - vy * ax) / v_xy_sq, -1.5, 1.5)
+            # Analytical Feedforward Yaw Angular Velocity for Figure-8 Cornering
+            vx = self._desired_vel_w[:, 0]
+            vy = self._desired_vel_w[:, 1]
+            ax = self._desired_acc_w[:, 0]
+            ay = self._desired_acc_w[:, 1]
+            v_xy_sq = torch.clamp(vx**2 + vy**2, min=1e-4)
+            self._desired_yaw_rate = torch.clamp((vx * ay - vy * ax) / v_xy_sq, -1.5, 1.5)
 
-        # Future Lookahead Waypoint (tau + 0.6s) to allow anticipation of turns
-        tau_look = tau + 0.6
-        self._lookahead_pos_w[:, 0] = origins[:, 0] + A_x * torch.sin(omega * tau_look)
-        self._lookahead_pos_w[:, 1] = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_look)
-        self._lookahead_pos_w[:, 2] = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_look)
+            # Future Lookahead Waypoint (tau + 0.6s) to allow anticipation of turns
+            tau_look = tau + 0.6
+            self._lookahead_pos_w[:, 0] = origins[:, 0] + A_x * torch.sin(omega * tau_look)
+            self._lookahead_pos_w[:, 1] = origins[:, 1] + (A_y * 0.5) * torch.sin(2.0 * omega * tau_look)
+            self._lookahead_pos_w[:, 2] = origins[:, 2] + z_0 + A_z * torch.sin(omega_z * tau_look)
+        else:
+            self._lookahead_pos_w[:] = self._desired_pos_w + self._desired_vel_w * 0.6
 
         # Estimate actual linear acceleration: a_t = (v_t - v_{t-1}) / dt
         cur_vel_w = self._robot.data.root_lin_vel_w
