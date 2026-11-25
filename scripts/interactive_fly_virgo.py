@@ -77,87 +77,7 @@ class ActorCritic(nn.Module):
         return self.actor_mean(hidden).clamp(-1.0, 1.0)
 
 
-class TerminalKeyboardListener:
-    """Non-blocking keyboard listener running in a background thread for the Terminal window."""
-    def __init__(self):
-        self.nudge_x = 0.0
-        self.nudge_y = 0.0
-        self.nudge_z = 0.0
-        self.nudge_yaw = 0.0
-        self.wind_mode = 1 # 1: Calm, 2: Beaufort 3, 3: Beaufort 5, 4: Beaufort 6
-        self.reset_req = False
-        self.hold_req = False
-        self.running = True
-        self.last_cmd = "Hover (Ready)"
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
 
-    def _run(self):
-        if not sys.stdin.isatty():
-            return
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            while self.running:
-                rlist, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if rlist:
-                    ch = sys.stdin.read(1)
-                    if ch in ('\x1b', 'x', 'X'):
-                        self.running = False
-                        break
-                    self._handle_key(ch)
-        except Exception:
-            pass
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    def _handle_key(self, ch):
-        step_m = 0.75 # 0.75 meter nudge per tap in terminal
-        yaw_step = 0.35 # ~20 degrees per tap
-
-        if ch in ('w', 'W'):
-            self.nudge_x += step_m
-            self.last_cmd = f"Terminal: Forward (+{step_m}m X)"
-        elif ch in ('s', 'S'):
-            self.nudge_x -= step_m
-            self.last_cmd = f"Terminal: Backward (-{step_m}m X)"
-        elif ch in ('a', 'A'):
-            self.nudge_y += step_m
-            self.last_cmd = f"Terminal: Left (+{step_m}m Y)"
-        elif ch in ('d', 'D'):
-            self.nudge_y -= step_m
-            self.last_cmd = f"Terminal: Right (-{step_m}m Y)"
-        elif ch in (' ', 'e', 'E'):
-            self.nudge_z += step_m * 0.5
-            self.last_cmd = f"Terminal: Climb (+{step_m*0.5}m Z)"
-        elif ch in ('c', 'C'):
-            self.nudge_z -= step_m * 0.5
-            self.last_cmd = f"Terminal: Descend (-{step_m*0.5}m Z)"
-        elif ch in ('q', 'Q'):
-            self.nudge_yaw += yaw_step
-            self.last_cmd = f"Terminal: Yaw Left (+{int(math.degrees(yaw_step))}°)"
-        elif ch in ('r', 'R'):
-            self.nudge_yaw -= yaw_step
-            self.last_cmd = f"Terminal: Yaw Right (-{int(math.degrees(yaw_step))}°)"
-        elif ch in ('h', 'H'):
-            self.hold_req = True
-            self.last_cmd = "Terminal: Hold / Hover"
-        elif ch in ('0', 'o', 'O'):
-            self.reset_req = True
-            self.last_cmd = "Terminal: Reset Origin"
-        elif ch == '1':
-            self.wind_mode = 1
-            self.last_cmd = "Wind: Calm (0 m/s)"
-        elif ch == '2':
-            self.wind_mode = 2
-            self.last_cmd = "Wind: Beaufort 3 (4.5 m/s)"
-        elif ch == '3':
-            self.wind_mode = 3
-            self.last_cmd = "Wind: Beaufort 5 (9.0 m/s)"
-        elif ch == '4':
-            self.wind_mode = 4
-            self.last_cmd = "Wind: Beaufort 6 Gale (14 m/s + 15N Push)"
 
 
 class MavlinkQGCBridge:
@@ -301,8 +221,8 @@ def main():
         has_se3_kb = False
         print(f"[Teleop] Note: {e}")
 
-    # Initialize Terminal Keyboard & QGC Bridge
-    kb_term = TerminalKeyboardListener()
+    # Active environmental disturbance mode (1: Calm, 2: Beaufort 3, 3: Beaufort 5, 4: Beaufort 6)
+    active_wind_mode = 1
     mav_bridge = MavlinkQGCBridge(port=args_cli.mavlink_port)
 
     # UDP IPC Socket for Dedicated Terminal 3 Flight Controller
@@ -377,7 +297,7 @@ def main():
 
     print("\n--> Drone is Airborne at (0, 0, 2m)! Click either window and press W/S/A/D to fly!\n")
 
-    while simulation_app.is_running() and kb_term.running:
+    while simulation_app.is_running():
         # 1. Read input from External Dedicated Terminal Controller (UDP port 9876)
         while True:
             try:
@@ -412,8 +332,8 @@ def main():
                     curr_target_yaw = 0.0
                     active_source = "CLI Reset"
                 if "wind_mode" in pkt:
-                    kb_term.wind_mode = int(pkt["wind_mode"])
-                    active_source = f"CLI Wind {kb_term.wind_mode}"
+                    active_wind_mode = int(pkt["wind_mode"])
+                    active_source = f"CLI Wind {active_wind_mode}"
             except (BlockingIOError, socket.error):
                 break
             except Exception:
@@ -431,34 +351,6 @@ def main():
             if abs(delta_pose[1]) > 0.01: win_vy = float(delta_pose[1])
             if abs(delta_pose[2]) > 0.01: win_vz = float(delta_pose[2])
             if abs(delta_pose[5]) > 0.01: win_yaw = float(delta_pose[5])
-
-        # 2. Check Terminal Keyboard inputs
-        if kb_term.reset_req:
-            curr_target_pos = torch.tensor([0.0, 0.0, 2.0], device=device)
-            curr_target_yaw = 0.0
-            kb_term.reset_req = False
-            active_source = "Reset to Origin"
-
-        if kb_term.hold_req:
-            kb_term.nudge_x = 0.0
-            kb_term.nudge_y = 0.0
-            kb_term.nudge_z = 0.0
-            kb_term.nudge_yaw = 0.0
-            kb_term.hold_req = False
-            active_source = "Hold Hover"
-
-        # Apply Terminal nudges directly to target position
-        if abs(kb_term.nudge_x) > 0.001 or abs(kb_term.nudge_y) > 0.001 or abs(kb_term.nudge_z) > 0.001 or abs(kb_term.nudge_yaw) > 0.001:
-            curr_target_pos[0] += kb_term.nudge_x
-            curr_target_pos[1] += kb_term.nudge_y
-            curr_target_pos[2] = torch.clamp(curr_target_pos[2] + kb_term.nudge_z, min=0.6, max=10.0)
-            curr_target_yaw += kb_term.nudge_yaw
-            active_source = kb_term.last_cmd
-            # Clear nudges once consumed
-            kb_term.nudge_x = 0.0
-            kb_term.nudge_y = 0.0
-            kb_term.nudge_z = 0.0
-            kb_term.nudge_yaw = 0.0
 
         # Apply Window Continuous Movement
         if abs(win_vx) > 0.01 or abs(win_vy) > 0.01 or abs(win_vz) > 0.01 or abs(win_yaw) > 0.01:
@@ -493,7 +385,7 @@ def main():
         env._desired_yaw_rate[0] = win_yaw
 
         # Set Environmental Wind according to user selection (1/2/3/4)
-        wind_mode = kb_term.wind_mode
+        wind_mode = active_wind_mode
         if wind_mode == 1:
             w_spd = 0.0
             w_dir = torch.tensor([0.0, 0.0, 0.0], device=device)
@@ -604,9 +496,11 @@ def main():
         t_sim += sim_dt
 
     print("\n\n[Interactive Flight] Flight session ended cleanly.")
-    kb_term.running = False
     simulation_app.close()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[Interactive Flight] Flight session ended by user (Ctrl+C).")
