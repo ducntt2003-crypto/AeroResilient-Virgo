@@ -4,11 +4,10 @@
 VIRGO UAV: LIVE INTERACTIVE 3D FLIGHT IN ISAAC SIM WITH KEYBOARD & QGROUNDCONTROL
 12-DOF Coaxial MorphQuad with 8 Dynamixel Servos & 8 Motors
 ================================================================================
-Features:
-1. Real-time 3D Viewport in Isaac Sim (DISPLAY=:0) with auto-tracking camera.
-2. Direct Keyboard Control (W/A/S/D/Space/C/Q/E/H/R/1/2/3/4).
-3. Concurrent MAVLink Bridge to QGroundControl on UDP 14550.
-4. Active Vectoring: Dead-level body attitude (0.0° roll, 0.0° pitch) while translating laterally.
+Dual-Input Architecture:
+1. Omniverse Window Keyboard: Click Isaac Sim 3D window and hold W/S/A/D/Q/E/C/V!
+2. Terminal Keyboard: Type W/S/A/D/Space/C/H/R/1/2/3/4 in the terminal!
+3. MAVLink Bridge: Open QGroundControl to view telemetry and control virtual sticks!
 ================================================================================
 """
 
@@ -32,8 +31,8 @@ sys.path.insert(0, os.path.join(REPO_DIR, "src"))
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Virgo UAV Interactive 3D Flight in Isaac Sim")
-parser.add_argument("--speed", type=float, default=2.5, help="Translational fly speed in m/s (default: 2.5)")
-parser.add_argument("--yaw-rate", type=float, default=1.0, help="Yaw rotation speed in rad/s (default: 1.0)")
+parser.add_argument("--speed", type=float, default=3.0, help="Translational fly speed in m/s (default: 3.0)")
+parser.add_argument("--yaw-rate", type=float, default=1.2, help="Yaw rotation speed in rad/s (default: 1.2)")
 parser.add_argument("--mavlink-port", type=int, default=14550, help="UDP port for QGroundControl connection (default: 14550)")
 parser.add_argument("--checkpoint", type=str, default=os.path.join(REPO_DIR, "checkpoints", "virgo_isaaclab_best.pt"))
 AppLauncher.add_app_launcher_args(parser)
@@ -47,6 +46,7 @@ simulation_app = app_launcher.app
 import isaaclab.sim as sim_utils
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.math import quat_rotate, quat_rotate_inverse
+from isaaclab.devices import Se3Keyboard, Se3KeyboardCfg
 from virgo_env_isaaclab import VirgoEnv, VirgoEnvCfg
 import torch.nn as nn
 
@@ -75,18 +75,18 @@ class ActorCritic(nn.Module):
         return self.actor_mean(hidden).clamp(-1.0, 1.0)
 
 
-class InteractiveKeyboardListener:
-    """Non-blocking keyboard listener running in a background thread."""
+class TerminalKeyboardListener:
+    """Non-blocking keyboard listener running in a background thread for the Terminal window."""
     def __init__(self):
-        self.cmd_vx = 0.0
-        self.cmd_vy = 0.0
-        self.cmd_vz = 0.0
-        self.cmd_yaw_rate = 0.0
+        self.nudge_x = 0.0
+        self.nudge_y = 0.0
+        self.nudge_z = 0.0
+        self.nudge_yaw = 0.0
         self.wind_mode = 1 # 1: Calm, 2: Beaufort 3, 3: Beaufort 5, 4: Beaufort 6
         self.reset_req = False
         self.hold_req = False
         self.running = True
-        self.last_key = "Hover"
+        self.last_cmd = "Hover (Ready)"
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -101,71 +101,61 @@ class InteractiveKeyboardListener:
                 rlist, _, _ = select.select([sys.stdin], [], [], 0.05)
                 if rlist:
                     ch = sys.stdin.read(1)
-                    if ch in ('\x1b', 'x', 'X'): # ESC or X to quit
+                    if ch in ('\x1b', 'x', 'X'):
                         self.running = False
                         break
                     self._handle_key(ch)
-                else:
-                    # Decay continuous translation when key is released
-                    self.cmd_vx *= 0.88
-                    self.cmd_vy *= 0.88
-                    self.cmd_vz *= 0.88
-                    self.cmd_yaw_rate *= 0.85
         except Exception:
             pass
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def _handle_key(self, ch):
-        speed = args_cli.speed
-        yaw_rate = args_cli.yaw_rate
+        step_m = 0.75 # 0.75 meter nudge per tap in terminal
+        yaw_step = 0.35 # ~20 degrees per tap
 
         if ch in ('w', 'W'):
-            self.cmd_vx = speed
-            self.last_key = "Forward (+X)"
+            self.nudge_x += step_m
+            self.last_cmd = f"Terminal: Forward (+{step_m}m X)"
         elif ch in ('s', 'S'):
-            self.cmd_vx = -speed
-            self.last_key = "Backward (-X)"
+            self.nudge_x -= step_m
+            self.last_cmd = f"Terminal: Backward (-{step_m}m X)"
         elif ch in ('a', 'A'):
-            self.cmd_vy = -speed
-            self.last_key = "Left (-Y)"
+            self.nudge_y += step_m
+            self.last_cmd = f"Terminal: Left (+{step_m}m Y)"
         elif ch in ('d', 'D'):
-            self.cmd_vy = speed
-            self.last_key = "Right (+Y)"
-        elif ch in (' ', 'e', 'E'): # Space or E for Climb
-            self.cmd_vz = speed * 0.7
-            self.last_key = "Climb (+Z)"
-        elif ch in ('c', 'C'): # C for Descend
-            self.cmd_vz = -speed * 0.7
-            self.last_key = "Descend (-Z)"
+            self.nudge_y -= step_m
+            self.last_cmd = f"Terminal: Right (-{step_m}m Y)"
+        elif ch in (' ', 'e', 'E'):
+            self.nudge_z += step_m * 0.5
+            self.last_cmd = f"Terminal: Climb (+{step_m*0.5}m Z)"
+        elif ch in ('c', 'C'):
+            self.nudge_z -= step_m * 0.5
+            self.last_cmd = f"Terminal: Descend (-{step_m*0.5}m Z)"
         elif ch in ('q', 'Q'):
-            self.cmd_yaw_rate = yaw_rate
-            self.last_key = "Yaw Left"
+            self.nudge_yaw += yaw_step
+            self.last_cmd = f"Terminal: Yaw Left (+{int(math.degrees(yaw_step))}°)"
         elif ch in ('r', 'R'):
-            self.cmd_yaw_rate = -yaw_rate
-            self.last_key = "Yaw Right"
+            self.nudge_yaw -= yaw_step
+            self.last_cmd = f"Terminal: Yaw Right (-{int(math.degrees(yaw_step))}°)"
         elif ch in ('h', 'H'):
-            self.cmd_vx = 0.0
-            self.cmd_vy = 0.0
-            self.cmd_vz = 0.0
-            self.cmd_yaw_rate = 0.0
             self.hold_req = True
-            self.last_key = "Hold Position"
+            self.last_cmd = "Terminal: Hold / Hover"
         elif ch in ('0', 'o', 'O'):
             self.reset_req = True
-            self.last_key = "Reset Origin"
+            self.last_cmd = "Terminal: Reset Origin"
         elif ch == '1':
             self.wind_mode = 1
-            self.last_key = "Wind: Calm (0 m/s)"
+            self.last_cmd = "Wind: Calm (0 m/s)"
         elif ch == '2':
             self.wind_mode = 2
-            self.last_key = "Wind: Beaufort 3 (4.5 m/s)"
+            self.last_cmd = "Wind: Beaufort 3 (4.5 m/s)"
         elif ch == '3':
             self.wind_mode = 3
-            self.last_key = "Wind: Beaufort 5 (9.0 m/s)"
+            self.last_cmd = "Wind: Beaufort 5 (9.0 m/s)"
         elif ch == '4':
             self.wind_mode = 4
-            self.last_key = "Wind: Beaufort 6 Gale (14 m/s + 15N Push)"
+            self.last_cmd = "Wind: Beaufort 6 Gale (14 m/s + 15N Push)"
 
 
 class MavlinkQGCBridge:
@@ -180,13 +170,12 @@ class MavlinkQGCBridge:
         self.qgc_yaw_rate = 0.0
         self.qgc_active = False
         self.boot_time = time.time()
-        self.lat = 47.397742 * 1e7 # Default Zurich airport reference (standard PX4 origin)
+        self.lat = 47.397742 * 1e7
         self.lon = 8.545594 * 1e7
         self.alt_base = 488.0
 
         if HAS_PYMAVLINK:
             try:
-                # Send out to QGC on 14550
                 self.mav = mavutil.mavlink_connection(f"udpout:127.0.0.1:{port}", source_system=1, source_component=1)
                 self.connected = True
                 print(f"[MAVLink] Initialized UDP broadcast on 127.0.0.1:{port} for QGroundControl.")
@@ -206,14 +195,12 @@ class MavlinkQGCBridge:
                 break
             mtype = msg.get_type()
             if mtype == "MANUAL_CONTROL":
-                # msg.x: pitch (-1000..1000), msg.y: roll (-1000..1000), msg.z: throttle (0..1000), msg.r: yaw (-1000..1000)
                 self.qgc_vx = (msg.x / 1000.0) * args_cli.speed
                 self.qgc_vy = (msg.y / 1000.0) * args_cli.speed
                 self.qgc_vz = ((msg.z - 500.0) / 500.0) * args_cli.speed * 0.7
                 self.qgc_yaw_rate = (msg.r / 1000.0) * args_cli.yaw_rate
                 self.qgc_active = True
             elif mtype == "SET_POSITION_TARGET_LOCAL_NED":
-                # Convert NED to World
                 self.qgc_vx = msg.vx if hasattr(msg, "vx") else 0.0
                 self.qgc_vy = msg.vy if hasattr(msg, "vy") else 0.0
                 self.qgc_vz = -msg.vz if hasattr(msg, "vz") else 0.0
@@ -223,7 +210,6 @@ class MavlinkQGCBridge:
         now = time.time()
         if not hasattr(self, "_last_heartbeat") or now - self._last_heartbeat >= 1.0:
             self._last_heartbeat = now
-            # Heartbeat
             self.mav.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_QUADROTOR,
                 mavutil.mavlink.MAV_AUTOPILOT_PX4,
@@ -231,7 +217,6 @@ class MavlinkQGCBridge:
                 0,
                 mavutil.mavlink.MAV_STATE_ACTIVE
             )
-            # System status (Battery 100%, 16.8V, 4S)
             self.mav.mav.sys_status_send(
                 0b11111111111111, 0b11111111111111, 0b11111111111111,
                 150, 16800, 1200, 98, 0, 0, 0, 0, 0, 0
@@ -250,7 +235,7 @@ class MavlinkQGCBridge:
             t_ms,
             float(pos_w[0]),
             float(pos_w[1]),
-            float(-pos_w[2]), # -Z for Down
+            float(-pos_w[2]),
             float(vel_w[0]),
             float(vel_w[1]),
             float(-vel_w[2])
@@ -274,20 +259,24 @@ class MavlinkQGCBridge:
 
 def main():
     print("=" * 85)
-    print("    VIRGO UAV: LIVE INTERACTIVE 3D FLIGHT IN ISAAC SIM & QGROUNDCONTROL    ")
+    print("   🎮 VIRGO UAV: LIVE DUAL-INPUT INTERACTIVE 3D FLIGHT IN ISAAC SIM    ")
     print("=" * 85)
-    print(" [Controls Guide - Keyboard Teleoperation]")
-    print("   * W / S : Fly Forward / Backward (+X / -X)")
-    print("   * A / D : Fly Left / Right (-Y / +Y) [Decoupled Zero-Tilt Vectoring!]")
-    print("   * Space / C : Fly Up / Fly Down (+Z / -Z)")
-    print("   * Q / R : Yaw Turn Left / Yaw Turn Right")
-    print("   * H     : Hold Position / Hover in Place")
-    print("   * 0     : Reset to Center Hover (X=0, Y=0, Z=2.0m)")
-    print("   * 1/2/3/4: Dynamic Wind Injection (1:Calm, 2:Beaufort3, 3:Beaufort5, 4:Beaufort6)")
-    print("   * ESC/X : Exit Flight Session")
+    print(" 💡 YOU CAN CONTROL FROM EITHER WINDOW:")
+    print("   1. [CLICK ISAAC SIM 3D WINDOW] & HOLD:")
+    print("      * W / S : Fly Forward / Backward (+X / -X)")
+    print("      * A / D : Fly Left / Right (+Y / -Y) [Watch 8 Servos Vector Dynamically!]")
+    print("      * Q / E : Fly Up / Fly Down (+Z / -Z)")
+    print("      * C / V : Yaw Turn Left / Yaw Turn Right")
+    print("   2. [OR IN THIS TERMINAL WINDOW] TAP:")
+    print("      * W / S : Nudge Forward / Backward (+0.75m)")
+    print("      * A / D : Nudge Left / Right (+0.75m)")
+    print("      * Space / C : Nudge Climb / Descend (+0.35m)")
+    print("      * Q / R : Nudge Yaw Left / Right")
+    print("      * H     : Hold Position / Hover")
+    print("      * 0     : Reset to Origin (0, 0, 2m)")
+    print("      * 1/2/3/4: Dynamic Wind (1:Calm, 2:Beaufort3, 3:Beaufort5, 4:Beaufort6)")
     print("=" * 85)
-    print(f" [QGroundControl Bridge] Broadcasting MAVLink telemetry to 127.0.0.1:{args_cli.mavlink_port}")
-    print("   Launch QGC in another terminal: /home/duc/QGroundControl-v4.3.0.AppImage")
+    print(f" [QGroundControl Bridge] MAVLink active on 127.0.0.1:{args_cli.mavlink_port}")
     print("=" * 85)
 
     cfg = VirgoEnvCfg()
@@ -298,6 +287,21 @@ def main():
 
     env = VirgoEnv(cfg=cfg)
     device = env.device
+
+    # Initialize Omniverse Window Keyboard Listener (Hooks directly to Isaac Sim 3D Window)
+    se3_kb_cfg = Se3KeyboardCfg(pos_sensitivity=args_cli.speed, rot_sensitivity=args_cli.yaw_rate)
+    try:
+        se3_kb = Se3Keyboard(se3_kb_cfg)
+        has_se3_kb = True
+        print("[Teleop] --> Successfully attached to Isaac Sim 3D Window Keyboard!")
+    except Exception as e:
+        se3_kb = None
+        has_se3_kb = False
+        print(f"[Teleop] Note: {e}")
+
+    # Initialize Terminal Keyboard & QGC Bridge
+    kb_term = TerminalKeyboardListener()
+    mav_bridge = MavlinkQGCBridge(port=args_cli.mavlink_port)
 
     # Initialize policy and load trained weights
     agent = ActorCritic(cfg.observation_space, cfg.action_space).to(device)
@@ -312,15 +316,15 @@ def main():
     obs_dict, _ = env.reset()
     obs = obs_dict["policy"]
 
-    # Visual Target Waypoint Marker (Glowing Golden/Red Sphere)
+    # Prominent Visual Target Waypoint Marker (Bright Glowing Neon Crimson Sphere)
     target_marker_cfg = VisualizationMarkersCfg(
         prim_path="/Visuals/TargetWaypoint",
         markers={
             "waypoint": sim_utils.SphereCfg(
-                radius=0.10,
+                radius=0.15,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(1.0, 0.35, 0.1),
-                    emissive_color=(0.95, 0.45, 0.05)
+                    diffuse_color=(1.0, 0.1, 0.05),
+                    emissive_color=(1.0, 0.25, 0.05)
                 ),
             )
         }
@@ -332,26 +336,23 @@ def main():
         prim_path="/Visuals/WindDirectionArrow",
         markers={
             "arrow_node": sim_utils.SphereCfg(
-                radius=0.06,
+                radius=0.065,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.2, 0.8, 1.0),
-                    emissive_color=(0.1, 0.6, 0.9)
+                    diffuse_color=(0.1, 0.85, 1.0),
+                    emissive_color=(0.1, 0.65, 0.95)
                 ),
             )
         }
     )
     wind_arrow_visualizer = VisualizationMarkers(wind_arrow_cfg)
 
-    # Initialize teleop listeners
-    kb = InteractiveKeyboardListener()
-    mav_bridge = MavlinkQGCBridge(port=args_cli.mavlink_port)
-
     # Interactive Target Coordinates (Starts at Hover: 0.0, 0.0, 2.0 m)
     curr_target_pos = torch.tensor([0.0, 0.0, 2.0], device=device)
     curr_target_yaw = 0.0
-    sim_dt = 0.02 # 50 Hz control step
+    sim_dt = 0.02
     t_sim = 0.0
     last_hud_time = time.time()
+    active_source = "Hover"
 
     # Initial camera view nicely framing the drone
     try:
@@ -359,37 +360,70 @@ def main():
     except Exception:
         pass
 
-    print("\n--> Drone is Airborne & Ready for Live Command! Start pressing W/A/S/D or use QGC!\n")
+    print("\n--> Drone is Airborne at (0, 0, 2m)! Click either window and press W/S/A/D to fly!\n")
 
-    while simulation_app.is_running() and kb.running:
-        # Check Reset command
-        if kb.reset_req:
+    while simulation_app.is_running() and kb_term.running:
+        # 1. Read input from Isaac Sim 3D Window (Omniverse Se3Keyboard)
+        win_vx, win_vy, win_vz, win_yaw = 0.0, 0.0, 0.0, 0.0
+        if has_se3_kb:
+            delta_pose, _ = se3_kb.advance()
+            # W/S controls x: +dx / -dx (Forward / Backward)
+            # A/D controls y: +dy / -dy (Left / Right)
+            # Q/E controls z: +dz / -dz (Climb / Descend)
+            # C/V controls yaw: +dyaw / -dyaw (Yaw Left / Yaw Right)
+            if abs(delta_pose[0]) > 0.01: win_vx = float(delta_pose[0])
+            if abs(delta_pose[1]) > 0.01: win_vy = float(delta_pose[1])
+            if abs(delta_pose[2]) > 0.01: win_vz = float(delta_pose[2])
+            if abs(delta_pose[5]) > 0.01: win_yaw = float(delta_pose[5])
+
+        # 2. Check Terminal Keyboard inputs
+        if kb_term.reset_req:
             curr_target_pos = torch.tensor([0.0, 0.0, 2.0], device=device)
             curr_target_yaw = 0.0
-            kb.reset_req = False
+            kb_term.reset_req = False
+            active_source = "Reset to Origin"
 
-        # Fuse Keyboard and QGroundControl inputs
-        vx = kb.cmd_vx
-        vy = kb.cmd_vy
-        vz = kb.cmd_vz
-        w_yaw = kb.cmd_yaw_rate
+        if kb_term.hold_req:
+            kb_term.nudge_x = 0.0
+            kb_term.nudge_y = 0.0
+            kb_term.nudge_z = 0.0
+            kb_term.nudge_yaw = 0.0
+            kb_term.hold_req = False
+            active_source = "Hold Hover"
 
+        # Apply Terminal nudges directly to target position
+        if abs(kb_term.nudge_x) > 0.001 or abs(kb_term.nudge_y) > 0.001 or abs(kb_term.nudge_z) > 0.001 or abs(kb_term.nudge_yaw) > 0.001:
+            curr_target_pos[0] += kb_term.nudge_x
+            curr_target_pos[1] += kb_term.nudge_y
+            curr_target_pos[2] = torch.clamp(curr_target_pos[2] + kb_term.nudge_z, min=0.6, max=10.0)
+            curr_target_yaw += kb_term.nudge_yaw
+            active_source = kb_term.last_cmd
+            # Clear nudges once consumed
+            kb_term.nudge_x = 0.0
+            kb_term.nudge_y = 0.0
+            kb_term.nudge_z = 0.0
+            kb_term.nudge_yaw = 0.0
+
+        # Apply Window Continuous Movement
+        if abs(win_vx) > 0.01 or abs(win_vy) > 0.01 or abs(win_vz) > 0.01 or abs(win_yaw) > 0.01:
+            curr_target_pos[0] += win_vx * sim_dt
+            curr_target_pos[1] += win_vy * sim_dt
+            curr_target_pos[2] = torch.clamp(curr_target_pos[2] + win_vz * sim_dt, min=0.6, max=10.0)
+            curr_target_yaw += win_yaw * sim_dt
+            active_source = f"Window Key: Vx={win_vx:+.1f}, Vy={win_vy:+.1f}"
+
+        # 3. Check QGroundControl input
         if mav_bridge.qgc_active:
             if abs(mav_bridge.qgc_vx) > 0.05 or abs(mav_bridge.qgc_vy) > 0.05 or abs(mav_bridge.qgc_vz) > 0.05:
-                vx = mav_bridge.qgc_vx
-                vy = mav_bridge.qgc_vy
-                vz = mav_bridge.qgc_vz
-                w_yaw = mav_bridge.qgc_yaw_rate
-
-        # Integrate velocity commands into target position & yaw
-        curr_target_pos[0] += vx * sim_dt
-        curr_target_pos[1] += vy * sim_dt
-        curr_target_pos[2] = torch.clamp(curr_target_pos[2] + vz * sim_dt, min=0.6, max=10.0)
-        curr_target_yaw += w_yaw * sim_dt
+                curr_target_pos[0] += mav_bridge.qgc_vx * sim_dt
+                curr_target_pos[1] += mav_bridge.qgc_vy * sim_dt
+                curr_target_pos[2] = torch.clamp(curr_target_pos[2] + mav_bridge.qgc_vz * sim_dt, min=0.6, max=10.0)
+                curr_target_yaw += mav_bridge.qgc_yaw_rate * sim_dt
+                active_source = "QGroundControl Stick"
 
         # Inject into environment desired targets
         env._desired_pos_w[0] = curr_target_pos
-        env._desired_vel_w[0] = torch.tensor([vx, vy, vz], device=device)
+        env._desired_vel_w[0] = torch.tensor([win_vx, win_vy, win_vz], device=device)
         env._desired_acc_w[0] = torch.tensor([0.0, 0.0, 0.0], device=device)
 
         # Desired Quaternion (Roll=0.0°, Pitch=0.0°, Yaw=curr_target_yaw)
@@ -400,30 +434,31 @@ def main():
         env._desired_quat_w[0, 2] = 0.0
         env._desired_quat_w[0, 3] = sp
         env._psi_des[0] = curr_target_yaw
-        env._desired_yaw_rate[0] = w_yaw
+        env._desired_yaw_rate[0] = win_yaw
 
         # Set Environmental Wind according to user selection (1/2/3/4)
-        if kb.wind_mode == 1: # Calm
+        wind_mode = kb_term.wind_mode
+        if wind_mode == 1:
             w_spd = 0.0
             w_dir = torch.tensor([0.0, 0.0, 0.0], device=device)
             impulse_f = 0.0
             stage_str = "Calm (0 m/s)"
-        elif kb.wind_mode == 2: # Beaufort 3
+        elif wind_mode == 2:
             w_spd = 4.5
             w_dir = torch.tensor([1.0, 0.0, 0.0], device=device)
             impulse_f = 0.0
             stage_str = "Beaufort 3 (4.5 m/s)"
-        elif kb.wind_mode == 3: # Beaufort 5
+        elif wind_mode == 3:
             w_spd = 9.0 + 1.5 * math.sin(3.0 * t_sim)
             w_dir = torch.tensor([0.707, 0.707, 0.0], device=device)
             impulse_f = 0.0
             stage_str = "Beaufort 5 (9.0 m/s)"
-        else: # Beaufort 6 Gale + Push
+        else:
             w_spd = 14.0 + 3.0 * math.sin(4.0 * t_sim)
             w_dir = torch.tensor([0.866, -0.5, 0.1], device=device)
             in_pulse = (int(t_sim * 2.0) % 4 == 0) and (t_sim % 0.5 < 0.15)
             impulse_f = 15.0 if in_pulse else 0.0
-            stage_str = f"Beaufort 6 (14 m/s + 15N Push!)"
+            stage_str = "Beaufort 6 (14 m/s + 15N Push!)"
 
         env._wind_w[0] = w_dir * w_spd
         env._ext_force_w[0] = torch.tensor([0.0, 1.0, 0.0], device=device) * impulse_f
@@ -466,32 +501,31 @@ def main():
         # Update MAVLink Telemetry to QGroundControl
         mav_bridge.update(cur_pos, cur_vel, cur_quat, servo_a, servo_b)
 
-        # On-Screen HUD in Terminal (Every 0.25s)
-        if time.time() - last_hud_time >= 0.25:
+        # On-Screen HUD in Terminal (Every 0.20s)
+        if time.time() - last_hud_time >= 0.20:
             last_hud_time = time.time()
             qw, qx, qy, qz = cur_quat[0], cur_quat[1], cur_quat[2], cur_quat[3]
             roll_deg = math.degrees(math.atan2(2.0 * (qw*qx + qy*qz), 1.0 - 2.0 * (qx*qx + qy*qy)))
             pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, 2.0 * (qw*qy - qz*qx)))))
-            yaw_deg = math.degrees(math.atan2(2.0 * (qw*qz + qx*qy), 1.0 - 2.0 * (qy*qy + qz*qz)))
             pos_err = np.linalg.norm(cur_pos - curr_target_pos.cpu().numpy()) * 100.0
 
             qgc_badge = "[QGC LINKED]" if mav_bridge.connected else "[QGC READY]"
-            pulse_badge = " [💥 15N PUSH!]" if impulse_f > 0.0 else ""
+            pulse_badge = " [💥 PUSH!]" if impulse_f > 0.0 else ""
 
             print(
-                f"\r[{t_sim:5.1f}s | {kb.last_key:<16}] "
-                f"Pos: ({cur_pos[0]:+4.1f}, {cur_pos[1]:+4.1f}, {cur_pos[2]:4.1f}m) | "
-                f"Tilt: (R:{roll_deg:+4.1f}°, P:{pitch_deg:+4.1f}°) | "
-                f"Gimbal β: {np.mean(np.abs(servo_b)):4.1f}° | "
-                f"Err: {pos_err:4.1f}cm | "
-                f"{stage_str}{pulse_badge} {qgc_badge}",
+                f"\r[{t_sim:5.1f}s | {active_source:<22}] "
+                f"Tgt:({curr_target_pos[0]:+4.1f},{curr_target_pos[1]:+4.1f},{curr_target_pos[2]:3.1f}m) | "
+                f"Drone:({cur_pos[0]:+4.1f},{cur_pos[1]:+4.1f},{cur_pos[2]:3.1f}m) | "
+                f"Tilt:(R:{roll_deg:+3.1f}°,P:{pitch_deg:+3.1f}°) | "
+                f"Gimbal β:{np.mean(np.abs(servo_b)):4.1f}° | "
+                f"{stage_str}{pulse_badge}",
                 end="", flush=True
             )
 
         t_sim += sim_dt
 
     print("\n\n[Interactive Flight] Flight session ended cleanly.")
-    kb.running = False
+    kb_term.running = False
     simulation_app.close()
 
 
