@@ -189,14 +189,14 @@ def main():
     print("      * A / D : Fly Left / Right (+Y / -Y) [Watch 8 Servos Vector Dynamically!]")
     print("      * Q / E : Fly Up / Fly Down (+Z / -Z)")
     print("      * C / V : Yaw Turn Left / Yaw Turn Right")
-    print("   2. [OR IN THIS TERMINAL WINDOW] TAP:")
-    print("      * W / S : Nudge Forward / Backward (+0.75m)")
-    print("      * A / D : Nudge Left / Right (+0.75m)")
-    print("      * Space / C : Nudge Climb / Descend (+0.35m)")
-    print("      * Q / R : Nudge Yaw Left / Right")
-    print("      * H     : Hold Position / Hover")
-    print("      * 0     : Reset to Origin (0, 0, 2m)")
-    print("      * 1/2/3/4: Dynamic Wind (1:Calm, 2:Beaufort3, 3:Beaufort5, 4:Beaufort6)")
+    print("      * B / M / G / K / N : Toggle Wind Presets Directly in 3D Viewport!")
+    print("   2. [OR IN TERMINAL 3 CONTROLLER] ./run_controller.sh:")
+    print("      * W / S / A / D / Space / C : Precision flight step nudge")
+    print("      * B : Beaufort 3 Breeze (4.5 m/s)  [DEFAULT ON SPAWN]")
+    print("      * M : Beaufort 5 Fresh Breeze (9.0 m/s)")
+    print("      * G : Beaufort 6 Gale (14.0 m/s + 15N Gust Shockwave)")
+    print("      * K : Calm (0 m/s Zero Wind)")
+    print("      * N / Tab : Cycle Next Wind Preset")
     print("=" * 85)
     print(f" [QGroundControl Bridge] MAVLink active on 127.0.0.1:{args_cli.mavlink_port}")
     print("=" * 85)
@@ -210,19 +210,49 @@ def main():
     env = VirgoEnv(cfg=cfg)
     device = env.device
 
+    # Active environmental disturbance mode (Defaults to 2: Beaufort 3 so wind streamlines are visible immediately!)
+    active_wind_mode = 2
+
     # Initialize Omniverse Window Keyboard Listener (Hooks directly to Isaac Sim 3D Window)
     se3_kb_cfg = Se3KeyboardCfg(pos_sensitivity=args_cli.speed, rot_sensitivity=args_cli.yaw_rate)
     try:
         se3_kb = Se3Keyboard(se3_kb_cfg)
         has_se3_kb = True
         print("[Teleop] --> Successfully attached to Isaac Sim 3D Window Keyboard!")
+
+        def _set_sim_wind(m):
+            nonlocal active_wind_mode
+            active_wind_mode = m
+            names = {1: "Calm (0 m/s)", 2: "Beaufort 3 (4.5 m/s)", 3: "Beaufort 5 (9.0 m/s)", 4: "Beaufort 6 (14 m/s + 15N)"}
+            print(f"[Wind Viewport] Set to Mode {m}: {names.get(m, '')}")
+
+        def _cycle_sim_wind():
+            nonlocal active_wind_mode
+            _set_sim_wind((active_wind_mode % 4) + 1)
+
+        # Register direct viewport letter shortcuts
+        se3_kb.add_callback("B", lambda: _set_sim_wind(2))
+        se3_kb.add_callback("M", lambda: _set_sim_wind(3))
+        se3_kb.add_callback("G", lambda: _set_sim_wind(4))
+        se3_kb.add_callback("K", lambda: _set_sim_wind(1))
+        se3_kb.add_callback("N", _cycle_sim_wind)
+        se3_kb.add_callback("TAB", _cycle_sim_wind)
+
+        # Register viewport number shortcuts if supported by carb
+        for k_name, mode_idx in [
+            ("KEY_1", 1), ("KEY_2", 2), ("KEY_3", 3), ("KEY_4", 4),
+            ("NUMPAD_1", 1), ("NUMPAD_2", 2), ("NUMPAD_3", 3), ("NUMPAD_4", 4),
+            ("ONE", 1), ("TWO", 2), ("THREE", 3), ("FOUR", 4),
+            ("1", 1), ("2", 2), ("3", 3), ("4", 4)
+        ]:
+            try:
+                se3_kb.add_callback(k_name, (lambda m=mode_idx: _set_sim_wind(m)))
+            except Exception:
+                pass
     except Exception as e:
         se3_kb = None
         has_se3_kb = False
         print(f"[Teleop] Note: {e}")
-
-    # Active environmental disturbance mode (1: Calm, 2: Beaufort 3, 3: Beaufort 5, 4: Beaufort 6)
-    active_wind_mode = 1
     mav_bridge = MavlinkQGCBridge(port=args_cli.mavlink_port)
 
     # UDP IPC Socket for Dedicated Terminal 3 Flight Controller
@@ -252,13 +282,13 @@ def main():
 
     # Prominent Visual Target Waypoint Marker (Bright Glowing Neon Crimson Sphere)
     target_marker_cfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/TargetWaypoint",
+        prim_path="/World/Visuals/TargetWaypoint",
         markers={
             "waypoint": sim_utils.SphereCfg(
-                radius=0.18,
+                radius=0.22,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(1.0, 0.08, 0.05),
-                    emissive_color=(1.0, 0.35, 0.1)
+                    diffuse_color=(1.0, 0.05, 0.0),
+                    emissive_color=(1.0, 0.35, 0.05)
                 ),
             )
         }
@@ -266,15 +296,15 @@ def main():
     target_visualizer = VisualizationMarkers(target_marker_cfg)
 
     # Prominent Visual 3D Wind Direction Arrow (Glowing Teal/Emerald Nodes hovering above drone)
-    NUM_ARROW_NODES = 10
+    NUM_ARROW_NODES = 12
     wind_arrow_cfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/WindDirectionArrow",
+        prim_path="/World/Visuals/WindDirectionArrow",
         markers={
             "arrow_node": sim_utils.SphereCfg(
-                radius=0.08,
+                radius=0.10,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.0, 1.0, 0.7),
-                    emissive_color=(0.1, 0.95, 0.65)
+                    diffuse_color=(0.0, 1.0, 0.4),
+                    emissive_color=(0.1, 1.0, 0.6)
                 ),
             )
         }
@@ -282,15 +312,15 @@ def main():
     wind_arrow_visualizer = VisualizationMarkers(wind_arrow_cfg)
 
     # Dynamic 3D Wind Streamlines (Flowing Airfield Particle Mesh past the drone)
-    NUM_STREAMS = 72
+    NUM_STREAMS = 120
     stream_marker_cfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/WindStreamlines",
+        prim_path="/World/Visuals/WindStreamlines",
         markers={
             "air_particle": sim_utils.SphereCfg(
-                radius=0.045,
+                radius=0.075,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.15, 0.85, 1.0),
-                    emissive_color=(0.3, 0.9, 1.0)
+                    diffuse_color=(0.0, 0.95, 1.0),
+                    emissive_color=(0.3, 1.0, 1.0)
                 ),
             )
         }
@@ -299,13 +329,13 @@ def main():
 
     # Dynamic Gust Impulse Shockwave Indicator (Pulsing Amber/Crimson Sphere upon 15N impact)
     gust_marker_cfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/GustImpulse",
+        prim_path="/World/Visuals/GustImpulse",
         markers={
             "shockwave": sim_utils.SphereCfg(
-                radius=0.32,
+                radius=0.48,
                 visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(1.0, 0.15, 0.0),
-                    emissive_color=(1.0, 0.65, 0.15)
+                    diffuse_color=(1.0, 0.1, 0.0),
+                    emissive_color=(1.0, 0.8, 0.1)
                 ),
             )
         }
@@ -321,8 +351,8 @@ def main():
     last_telem_send = 0.0
     active_source = "Hover"
 
-    # Initialize 72 stream particle positions around target in 3D volume
-    stream_offsets = (torch.rand(NUM_STREAMS, 3, device=device) - 0.5) * torch.tensor([4.5, 4.5, 2.2], device=device)
+    # Initialize 120 stream particle positions around target in 3D volume
+    stream_offsets = (torch.rand(NUM_STREAMS, 3, device=device) - 0.5) * torch.tensor([4.8, 4.8, 2.4], device=device)
     stream_pts_w = curr_target_pos.clone().unsqueeze(0).repeat(NUM_STREAMS, 1) + stream_offsets
 
     # Initial camera view nicely framing the drone
@@ -488,9 +518,10 @@ def main():
             # Rel vector from drone to particles
             rel_pos = stream_pts_w - drone_pt.unsqueeze(0)
             proj_along_wind = torch.sum(rel_pos * w_dir.unsqueeze(0), dim=-1)
+            dist_from_drone = torch.norm(rel_pos, dim=-1)
 
-            # Particles that flowed > 2.8m downstream wrap back to -2.8m upstream
-            downstream_mask = proj_along_wind > 2.8
+            # Particles that flowed > 3.2m downstream or drifted > 4.5m away wrap upstream
+            downstream_mask = (proj_along_wind > 3.2) | (dist_from_drone > 4.5)
             if downstream_mask.any():
                 n_reset = int(downstream_mask.sum().item())
                 lat_r = (torch.rand(n_reset, 2, device=device) - 0.5)
@@ -502,11 +533,11 @@ def main():
                 u2 = torch.cross(w_dir, u1)
                 u2 = u2 / torch.clamp(torch.norm(u2), min=1e-4)
 
-                upstream_base = drone_pt - w_dir * 2.8
+                upstream_base = drone_pt - w_dir * 3.0
                 new_pts = (
                     upstream_base.unsqueeze(0)
-                    + u1.unsqueeze(0) * (lat_r[:, 0:1] * 3.6)
-                    + u2.unsqueeze(0) * (lat_r[:, 1:2] * 2.0)
+                    + u1.unsqueeze(0) * (lat_r[:, 0:1] * 3.8)
+                    + u2.unsqueeze(0) * (lat_r[:, 1:2] * 2.2)
                 )
                 stream_pts_w[downstream_mask] = new_pts
 
@@ -520,11 +551,15 @@ def main():
         # ----------------------------------------------------------------------
         if w_spd > 0.3:
             arrow_origin = drone_pt.clone()
-            arrow_origin[2] += 1.25
-            arrow_length = min(2.5, 0.14 * w_spd + 0.4)
+            arrow_origin[2] += 1.35
+            arrow_length = min(2.8, 0.16 * w_spd + 0.6)
             t_steps = torch.linspace(0.0, arrow_length, NUM_ARROW_NODES, device=device).unsqueeze(-1)
             arrow_pts = arrow_origin.unsqueeze(0) + t_steps * w_dir.unsqueeze(0)
-            wind_arrow_visualizer.visualize(translations=arrow_pts)
+            arrow_scales = torch.ones(NUM_ARROW_NODES, 3, device=device)
+            arrow_scales[-1] = 2.4
+            arrow_scales[-2] = 1.7
+            arrow_scales[-3] = 1.3
+            wind_arrow_visualizer.visualize(translations=arrow_pts, scales=arrow_scales)
         else:
             hidden_arrow = torch.full((NUM_ARROW_NODES, 3), -50.0, device=device)
             wind_arrow_visualizer.visualize(translations=hidden_arrow)

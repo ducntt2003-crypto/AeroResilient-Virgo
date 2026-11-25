@@ -96,7 +96,38 @@ def test_teleop_ipc():
         print(f"[Test] After Reset: Target={pkt4['target']}")
         assert abs(pkt4['target'][0]) < 0.1 and abs(pkt4['target'][1]) < 0.1 and abs(pkt4['target'][2] - 2.0) < 0.1, "Target did not reset to (0, 0, 2)!"
 
-        print("\n✅ ALL IPC TELEOPERATION TESTS PASSED PERFECTLY!\n")
+        # Step 5: Verify Default Wind is Beaufort 3 (mode 2)
+        assert pkt4['wind_mode'] == 2, f"Expected default wind mode 2 (Beaufort 3), got {pkt4['wind_mode']}"
+        print(f"[Test] Default wind verified: Mode {pkt4['wind_mode']} ({pkt4['wind_name']}), Spd={pkt4['wind_spd']} m/s")
+
+        # Step 6: Test Switching to Beaufort 5 (mode 3)
+        print("[Test] Sending Wind Mode 3 (Beaufort 5 - 9.0 m/s)...")
+        sock_cmd.sendto(json.dumps({"wind_mode": 3}).encode(), (UDP_HOST, PORT_CMD))
+        time.sleep(0.4)
+        pkt5 = get_latest_packet(sock_telem)
+        print(f"[Test] Wind Mode 3: Mode={pkt5['wind_mode']}, Spd={pkt5['wind_spd']} m/s")
+        assert pkt5['wind_mode'] == 3, f"Failed to switch to wind mode 3! Got {pkt5['wind_mode']}"
+        assert pkt5['wind_spd'] > 6.0, f"Expected wind speed > 6.0 m/s in Beaufort 5, got {pkt5['wind_spd']}"
+
+        # Step 7: Test Switching to Beaufort 6 (mode 4)
+        print("[Test] Sending Wind Mode 4 (Beaufort 6 - 14.0 m/s + 15N)...")
+        sock_cmd.sendto(json.dumps({"wind_mode": 4}).encode(), (UDP_HOST, PORT_CMD))
+        time.sleep(0.4)
+        pkt6 = get_latest_packet(sock_telem)
+        print(f"[Test] Wind Mode 4: Mode={pkt6['wind_mode']}, Spd={pkt6['wind_spd']} m/s")
+        assert pkt6['wind_mode'] == 4, f"Failed to switch to wind mode 4! Got {pkt6['wind_mode']}"
+        assert pkt6['wind_spd'] > 10.0, f"Expected wind speed > 10.0 m/s in Beaufort 6, got {pkt6['wind_spd']}"
+
+        # Step 8: Test Switching to Calm (mode 1)
+        print("[Test] Sending Wind Mode 1 (Calm - 0 m/s)...")
+        sock_cmd.sendto(json.dumps({"wind_mode": 1}).encode(), (UDP_HOST, PORT_CMD))
+        time.sleep(0.4)
+        pkt7 = get_latest_packet(sock_telem)
+        print(f"[Test] Wind Mode 1: Mode={pkt7['wind_mode']}, Spd={pkt7['wind_spd']} m/s")
+        assert pkt7['wind_mode'] == 1, f"Failed to switch to wind mode 1! Got {pkt7['wind_mode']}"
+        assert pkt7['wind_spd'] == 0.0, f"Expected wind speed 0.0 m/s in Calm mode, got {pkt7['wind_spd']}"
+
+        print("\n✅ ALL IPC TELEOPERATION & DYNAMIC WIND TESTS PASSED PERFECTLY!\n")
         return True
 
     finally:

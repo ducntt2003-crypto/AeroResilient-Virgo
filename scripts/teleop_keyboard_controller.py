@@ -40,7 +40,7 @@ def get_key(fd, is_tty=True):
     except Exception:
         return None
     if ch1 == "\x1b":
-        # Potential arrow key sequence
+        # Potential arrow key sequence or keypad escape sequence
         rlist, _, _ = select.select([fd], [], [], 0.02)
         if rlist:
             try:
@@ -51,6 +51,13 @@ def get_key(fd, is_tty=True):
                     elif ch3 == "B": return "DOWN"
                     elif ch3 == "C": return "RIGHT"
                     elif ch3 == "D": return "LEFT"
+                elif ch2 == "O":
+                    ch3 = os.read(fd, 1).decode("latin1", errors="ignore")
+                    if ch3 == "q": return "1"
+                    elif ch3 == "r": return "2"
+                    elif ch3 == "s": return "3"
+                    elif ch3 == "t": return "4"
+                    elif ch3 == "p": return "0"
             except Exception:
                 pass
         return "ESC"
@@ -154,8 +161,9 @@ def render_dashboard(step_m, step_yaw, last_cmd, drone_state, wind_name, wind_mo
     out += "║    \033[1;32m[A / ←]\033[0m Strafe Left (0.0° Body Tilt!) \033[1;33m[Q]        \033[0m Yaw Rotate Left                   ║\n"
     out += "║    \033[1;32m[D / →]\033[0m Strafe Right (0.0° Body Tilt!)\033[1;33m[R]        \033[0m Yaw Rotate Right                  ║\n"
     out += "║    ──────────────────────────────────────────────────────────────────────────────    ║\n"
-    out += "║    \033[1;35m[1]\033[0m Calm (0 m/s)              \033[1;35m[2]\033[0m Beaufort 3 (4.5 m/s)                            ║\n"
-    out += "║    \033[1;35m[3]\033[0m Beaufort 5 (9.0 m/s)      \033[1;35m[4]\033[0m Beaufort 6 (14 m/s + 15N Gust Push!)            ║\n"
+    out += "║    \033[1;35m[N / Tab]\033[0m Cycle Next Wind Preset      \033[1;35m[B / 2]\033[0m Beaufort 3 Breeze (4.5 m/s)         ║\n"
+    out += "║    \033[1;35m[M / 3]\033[0m   Beaufort 5 (9.0 m/s)        \033[1;35m[G / 4]\033[0m Beaufort 6 Gale (14 m/s + 15N)      ║\n"
+    out += "║    \033[1;35m[K / 1]\033[0m   Calm / Zero Wind (0 m/s)    \033[1;35m[P]\033[0m     Cycle Prev Wind Preset               ║\n"
     out += f"║    \033[1;34m[H]\033[0m Hold Hover  \033[1;34m[0]\033[0m Reset Origin  \033[1;34m[+/-]\033[0m Step: \033[1;33m{step_m:.2f}m\033[0m   \033[1;34m[[/]]\033[0m Yaw: \033[1;33m{math.degrees(step_yaw):.1f}°\033[0m        ║\n"
     out += "║    \033[1;31m[ESC / X]\033[0m Exit Flight Controller                                                  ║\n"
 
@@ -190,8 +198,8 @@ def main():
         3: "Beaufort 5 - Fresh Breeze (9.0 m/s)",
         4: "Beaufort 6 - Gale (14 m/s + 15N Gust Push!)"
     }
-    wind_mode = 1
-    last_cmd = "System Ready - Press W/A/S/D to Fly"
+    wind_mode = 2
+    last_cmd = "System Ready - Default: Beaufort 3 (4.5 m/s). Press W/A/S/D to Fly"
     drone_state = None
     last_rx_time = 0.0
     packet_count = 0
@@ -273,10 +281,30 @@ def main():
             elif key == '0':
                 packet = {"reset": True}
                 last_cmd = "RESET TO ORIGIN (Hover at 0, 0, 2m)"
-            elif key in ('1', '2', '3', '4'):
-                wind_mode = int(key)
+            elif key in ('b', 'B', '2'):
+                wind_mode = 2
                 packet = {"wind_mode": wind_mode}
-                last_cmd = f"SET WIND DISTURBANCE: {wind_names[wind_mode]}"
+                last_cmd = f"SET WIND: [B] Beaufort 3 Breeze (4.5 m/s)"
+            elif key in ('m', 'M', '3'):
+                wind_mode = 3
+                packet = {"wind_mode": wind_mode}
+                last_cmd = f"SET WIND: [M] Beaufort 5 Fresh Breeze (9.0 m/s)"
+            elif key in ('g', 'G', '4'):
+                wind_mode = 4
+                packet = {"wind_mode": wind_mode}
+                last_cmd = f"SET WIND: [G] Beaufort 6 Gale (14 m/s + 15N Gust Push!)"
+            elif key in ('k', 'K', 'o', 'O', '1'):
+                wind_mode = 1
+                packet = {"wind_mode": wind_mode}
+                last_cmd = f"SET WIND: [K] Calm / Zero Wind (0 m/s)"
+            elif key in ('n', 'N', '\t'):
+                wind_mode = (wind_mode % 4) + 1
+                packet = {"wind_mode": wind_mode}
+                last_cmd = f"CYCLE NEXT WIND: [{wind_mode}] {wind_names[wind_mode]}"
+            elif key in ('p', 'P'):
+                wind_mode = 4 if wind_mode == 1 else (wind_mode - 1)
+                packet = {"wind_mode": wind_mode}
+                last_cmd = f"CYCLE PREV WIND: [{wind_mode}] {wind_names[wind_mode]}"
             elif key in ('+', '='):
                 step_m = round(min(3.0, step_m + 0.2), 2)
                 step_z = round(min(2.0, step_z + 0.1), 2)
