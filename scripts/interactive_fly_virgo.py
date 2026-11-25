@@ -341,16 +341,20 @@ def main():
 
         # 2. Read input from Isaac Sim 3D Window (Omniverse Se3Keyboard)
         win_vx, win_vy, win_vz, win_yaw = 0.0, 0.0, 0.0, 0.0
-        if has_se3_kb:
-            delta_pose, _ = se3_kb.advance()
-            # W/S controls x: +dx / -dx (Forward / Backward)
-            # A/D controls y: +dy / -dy (Left / Right)
-            # Q/E controls z: +dz / -dz (Climb / Descend)
-            # C/V controls yaw: +dyaw / -dyaw (Yaw Left / Yaw Right)
-            if abs(delta_pose[0]) > 0.01: win_vx = float(delta_pose[0])
-            if abs(delta_pose[1]) > 0.01: win_vy = float(delta_pose[1])
-            if abs(delta_pose[2]) > 0.01: win_vz = float(delta_pose[2])
-            if abs(delta_pose[5]) > 0.01: win_yaw = float(delta_pose[5])
+        if has_se3_kb and se3_kb is not None:
+            try:
+                res = se3_kb.advance()
+                delta_pose = res[0] if isinstance(res, (tuple, list)) else res
+                # W/S controls x: +dx / -dx (Forward / Backward)
+                # A/D controls y: +dy / -dy (Left / Right)
+                # Q/E controls z: +dz / -dz (Climb / Descend)
+                # C/V controls yaw: +dyaw / -dyaw (Yaw Left / Yaw Right)
+                if abs(float(delta_pose[0])) > 0.01: win_vx = float(delta_pose[0])
+                if abs(float(delta_pose[1])) > 0.01: win_vy = float(delta_pose[1])
+                if abs(float(delta_pose[2])) > 0.01: win_vz = float(delta_pose[2])
+                if abs(float(delta_pose[5])) > 0.01: win_yaw = float(delta_pose[5])
+            except Exception:
+                pass
 
         # Apply Window Continuous Movement
         if abs(win_vx) > 0.01 or abs(win_vy) > 0.01 or abs(win_vz) > 0.01 or abs(win_yaw) > 0.01:
